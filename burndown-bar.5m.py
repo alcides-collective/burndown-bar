@@ -61,21 +61,27 @@ def fetch_usage(token):
         return json.loads(resp.read().decode())
 
 
-def load_cache():
+def read_cache():
     try:
         with open(CACHE_PATH) as f:
-            cached = json.load(f)
-        return cached["data"], dt.datetime.fromisoformat(cached["fetched_at"])
+            return json.load(f)
     except Exception:
-        return None, None
+        return {}
 
 
-def save_cache(data, now):
+def write_cache(cache):
     try:
         with open(CACHE_PATH, "w") as f:
-            json.dump({"data": data, "fetched_at": now.isoformat()}, f)
+            json.dump(cache, f)
     except Exception:
         pass
+
+
+def cache_ts(cache, key):
+    try:
+        return dt.datetime.fromisoformat(cache[key])
+    except Exception:
+        return None
 
 
 def analyze(entry, window_h, now):
@@ -188,23 +194,46 @@ def main():
         line("Refresh | refresh=true")
         return
 
+    cache = read_cache()
+    cached = cache.get("data")
+    cached_at = cache_ts(cache, "fetched_at")
+    failed_at = cache_ts(cache, "failed_at")
+    cache_age = (NOW - cached_at).total_seconds() if cached_at else None
+    fail_age = (NOW - failed_at).total_seconds() if failed_at else None
+
+    # The endpoint is shared with Claude Code's own polling and 429s when
+    # hammered: serve fresh-enough cache without touching the API, and after
+    # a failure back off for 5 minutes before trying again.
     data, fetched_at, stale_err = None, NOW, None
-    try:
-        data = fetch_usage(token)
-        save_cache(data, NOW)
-    except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
-            line("⚠️ Claude auth")
-            line("---")
-            line(f"Usage API returned {e.code} — token likely expired", color="red,red")
-            line("Run any prompt in Claude Code to refresh it, then refresh here", size=12)
-            line("Refresh | refresh=true")
-            return
-        data, fetched_at = load_cache()
-        stale_err = f"HTTP {e.code}"
-    except Exception as e:
-        data, fetched_at = load_cache()
-        stale_err = type(e).__name__
+    skip_fetch = cached is not None and (
+        (cache_age is not None and cache_age < 90)
+        or (fail_age is not None and fail_age < 300)
+    )
+    if skip_fetch:
+        data, fetched_at = cached, cached_at or NOW
+        if not (cache_age is not None and cache_age < 90):
+            stale_err = "rate-limited — backing off"
+    else:
+        try:
+            data = fetch_usage(token)
+            write_cache({"data": data, "fetched_at": NOW.isoformat()})
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                line("⚠️ Claude auth")
+                line("---")
+                line(f"Usage API returned {e.code} — token likely expired", color="red,red")
+                line("Run any prompt in Claude Code to refresh it, then refresh here", size=12)
+                line("Refresh | refresh=true")
+                return
+            cache["failed_at"] = NOW.isoformat()
+            write_cache(cache)
+            data, fetched_at = cached, cached_at or NOW
+            stale_err = "rate-limited (HTTP 429)" if e.code == 429 else f"HTTP {e.code}"
+        except Exception as e:
+            cache["failed_at"] = NOW.isoformat()
+            write_cache(cache)
+            data, fetched_at = cached, cached_at or NOW
+            stale_err = type(e).__name__
 
     if data is None:
         line("⚠️ Claude")
@@ -244,7 +273,7 @@ def main():
     line("---")
     note = f"Fetched {fetched_at.astimezone().strftime('%H:%M')}"
     if stale_err:
-        note += f" (stale — last fetch failed: {stale_err})"
+        note += f" (cached — last fetch {stale_err})"
     line(note, size=11, color="gray,gray")
     line("Open claude.ai usage | href=https://claude.ai/settings/usage")
     line("Refresh | refresh=true")
