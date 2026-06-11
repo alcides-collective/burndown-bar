@@ -2,7 +2,7 @@
 # <xbar.title>Burndown Bar</xbar.title>
 # <xbar.version>v1.0.0</xbar.version>
 # <xbar.author>Jakub Dudek</xbar.author>
-# <xbar.author.github>burndownbar</xbar.author.github>
+# <xbar.author.github>alcides-collective</xbar.author.github>
 # <xbar.desc>Not how much Claude quota you've used — how fast you're burning it. Pace vs sustainable, projected dry time vs reset.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
 # <xbar.abouturl>https://burndown.bar</xbar.abouturl>

@@ -45,7 +45,7 @@ Requires macOS, [SwiftBar](https://github.com/swiftbar/SwiftBar), and a Claude P
 
 ```sh
 brew install swiftbar   # if you don't have it yet
-curl -fsSL https://raw.githubusercontent.com/burndownbar/burndown-bar/main/burndown-bar.5m.py \
+curl -fsSL https://raw.githubusercontent.com/alcides-collective/burndown-bar/main/burndown-bar.5m.py \
   -o "$(defaults read com.ameba.SwiftBar PluginDirectory)/burndown-bar.5m.py" \
   && chmod +x "$(defaults read com.ameba.SwiftBar PluginDirectory)/burndown-bar.5m.py"
 ```
