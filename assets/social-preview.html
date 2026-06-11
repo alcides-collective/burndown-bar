@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; }
+  body {
+    background: #0d1117;
+    font-family: -apple-system, "SF Pro Display", "Helvetica Neue", sans-serif;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 36px;
+  }
+  .pill {
+    background: #1c2128;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 14px 28px;
+    font-size: 30px;
+    font-family: "SF Mono", ui-monospace, Menlo, monospace;
+    color: #e6edf3;
+    letter-spacing: 0.5px;
+  }
+  .pill .hot { color: #ff6a4d; }
+  h1 { color: #e6edf3; font-size: 84px; font-weight: 700; letter-spacing: -2px; }
+  p  { color: #8b949e; font-size: 32px; font-weight: 400; max-width: 900px; text-align: center; }
+  p b { color: #c9d1d9; font-weight: 600; }
+  .bar {
+    position: absolute; bottom: 0; left: 0; right: 0; height: 8px;
+    background: linear-gradient(90deg, #3fb950 0%, #d29922 55%, #f85149 80%, #f85149 100%);
+  }
+</style>
+</head>
+<body>
+  <div class="pill">🔥 <span class="hot">1.12× → dry tomorrow 18:50</span></div>
+  <h1>Burndown Bar</h1>
+  <p>Not how much Claude quota you've used — <b>how fast you're burning it.</b></p>
+  <div class="bar"></div>
+</body>
+</html>

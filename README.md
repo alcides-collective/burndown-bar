@@ -9,15 +9,6 @@
 ![SwiftBar plugin](https://img.shields.io/badge/SwiftBar-plugin-orange?style=flat)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen?style=flat)
 
-<!-- TODO before publishing: replace this comment with the hero screenshot.
-Tight crop of the menu bar + open dropdown, dark wallpaper, other icons hidden,
-~1400px wide. Dark mode first; add a light variant if you can:
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.png">
-  <img alt="Burndown Bar in the macOS menu bar" src="assets/hero-light.png" width="700">
-</picture>
--->
-
 </div>
 
 Every Claude usage monitor tells you the level: `76% used`. Burndown Bar tells you the slope:
