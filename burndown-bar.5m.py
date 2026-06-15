@@ -294,7 +294,9 @@ def title_for(a):
     if a["exhausted"]:
         return f"⛔ 100% · resets {fmt_when(a['reset'], NOW)}"
     if a["will_run_out"]:
-        return f"🔥 {a['pace']:.2f}× → dry {fmt_when(a['dry_at'], NOW)}"
+        # Relative runway, not a calendar date — on a weekly window the exact
+        # day is noise; how much runway is left is the point.
+        return f"🔥 {a['pace']:.2f}× → dry in {fmt_dur((a['dry_at'] - NOW).total_seconds() / 3600.0)}"
     if a["pace"] >= 0.85:
         return f"🟡 {a['pace']:.2f}× · proj {a['projected']:.0f}%"
     return f"🟢 {a['pace']:.2f}× · proj {a['projected']:.0f}%"
