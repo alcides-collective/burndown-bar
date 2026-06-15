@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # <xbar.title>Burndown Bar</xbar.title>
-# <xbar.version>v1.0.0</xbar.version>
+# <xbar.version>v1.1.0</xbar.version>
 # <xbar.author>Jakub Dudek</xbar.author>
 # <xbar.author.github>alcides-collective</xbar.author.github>
 # <xbar.desc>Not how much Claude quota you've used — how fast you're burning it. Pace vs sustainable, projected dry time vs reset.</xbar.desc>
@@ -23,6 +23,17 @@ CREDS_FILE = os.path.expanduser("~/.claude/.credentials.json")
 CACHE_PATH = os.path.join(
     os.environ.get("SWIFTBAR_PLUGIN_CACHE_PATH", "/tmp"), "claude-burn-cache.json"
 )
+
+# OpenRouter is optional: only shown when a key is configured. Read from
+# $OPENROUTER_API_KEY first, then a one-line key file.
+OPENROUTER_CREDITS_URL = "https://openrouter.ai/api/v1/credits"
+OPENROUTER_KEY_FILE = os.path.expanduser("~/.config/burndown-bar/openrouter-key")
+OR_CACHE_PATH = os.path.join(
+    os.environ.get("SWIFTBAR_PLUGIN_CACHE_PATH", "/tmp"), "openrouter-burn-cache.json"
+)
+OR_SAMPLE_MAX = 300          # cap on stored spend snapshots
+OR_SAMPLE_WINDOW_H = 24.0    # compute the current pace over this trailing window
+OR_SAMPLE_MIN_SPAN_H = 0.25  # need this much history before projecting a dry date
 
 WINDOWS = [
     ("seven_day", "Weekly limit", 168.0, True),
@@ -61,17 +72,17 @@ def fetch_usage(token):
         return json.loads(resp.read().decode())
 
 
-def read_cache():
+def read_cache(path=CACHE_PATH):
     try:
-        with open(CACHE_PATH) as f:
+        with open(path) as f:
             return json.load(f)
     except Exception:
         return {}
 
 
-def write_cache(cache):
+def write_cache(cache, path=CACHE_PATH):
     try:
-        with open(CACHE_PATH, "w") as f:
+        with open(path, "w") as f:
             json.dump(cache, f)
     except Exception:
         pass
@@ -82,6 +93,148 @@ def cache_ts(cache, key):
         return dt.datetime.fromisoformat(cache[key])
     except Exception:
         return None
+
+
+# ── OpenRouter: prepaid credit balance + spend trajectory ─────────────────
+# OpenRouter credits don't reset like Claude's windows — they're a balance
+# that only drains. So instead of a window we snapshot cumulative spend
+# (total_usage) across runs and extrapolate when the balance hits zero.
+
+def get_openrouter_key():
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        with open(OPENROUTER_KEY_FILE) as f:
+            return f.read().strip() or None
+    except Exception:
+        return None
+
+
+def _openrouter_get(url, key):
+    req = urllib.request.Request(url, headers={
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    })
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode()).get("data") or {}
+
+
+def fetch_openrouter(key):
+    """Account credit balance (total purchased minus total spent)."""
+    return {"credits": _openrouter_get(OPENROUTER_CREDITS_URL, key)}
+
+
+def analyze_openrouter(data, samples, now):
+    """Account balance + a spend trajectory toward zero."""
+    if not data:
+        return None
+    credits = data.get("credits") or {}
+    total = float(credits.get("total_credits") or 0.0)
+    used = float(credits.get("total_usage") or 0.0)
+    balance = total - used
+
+    # Spend rate from cumulative-usage snapshots in the trailing window.
+    # total_usage only ever rises, so a delta over time survives top-ups.
+    pts = sorted((s for s in samples if len(s) == 2), key=lambda s: s[0])
+    rate = None  # $/h; None means not enough history to say
+    if pts:
+        cutoff = (now - dt.timedelta(hours=OR_SAMPLE_WINDOW_H)).isoformat()
+        window = [p for p in pts if p[0] >= cutoff] or pts
+        first_ts = dt.datetime.fromisoformat(window[0][0])
+        span_h = (now - first_ts).total_seconds() / 3600.0
+        if span_h >= OR_SAMPLE_MIN_SPAN_H:
+            rate = max(0.0, (used - float(window[0][1])) / span_h)
+
+    dry_in_h = balance / rate if (rate and balance > 0) else None
+    return {
+        "total": total, "used": used, "balance": balance,
+        "rate": rate, "per_day": (rate * 24) if rate is not None else None,
+        "dry_in_h": dry_in_h, "depleted": balance <= 0,
+    }
+
+
+def render_openrouter(a, stale_err=None):
+    ok, hot, bad = "green,lime", "orange,orange", "red,red"
+    if a is None:
+        line("OpenRouter — no data", size=13, color=bad)
+        line("Could not reach the credits API"
+             + (f" ({stale_err})" if stale_err else ""), size=12, color="gray,gray")
+        line("Set $OPENROUTER_API_KEY or write ~/.config/burndown-bar/openrouter-key",
+             size=11, color="gray,gray")
+        return
+
+    if a["depleted"]:
+        line("OpenRouter — depleted", size=13, color=bad)
+    else:
+        line(f"OpenRouter — ${a['balance']:.2f} left", size=13)
+
+    if a["rate"] is None:
+        line("Spend rate: warming up — need a little history", size=12, color="gray,gray")
+    elif a["rate"] <= 0:
+        line("No recent spend — balance steady", size=12, color=ok)
+    else:
+        runway = a["dry_in_h"]
+        rc = ok if runway is None else (
+            bad if runway < 48 else hot if runway < 7 * 24 else ok)
+        line(f"Pace: ${a['per_day']:.2f}/day (${a['rate']:.3f}/h)", size=12, color=rc)
+        if runway is not None:
+            line(f"Balance empties in ~{fmt_dur(runway)} at this pace", size=12, color=rc)
+
+    if stale_err:
+        line(f"(cached — last fetch {stale_err})", size=11, color="gray,gray")
+
+
+def openrouter_status():
+    """Fetch + analyze OpenRouter, mirroring the Claude cache/backoff dance.
+
+    Returns (analysis_or_None, stale_err_or_None, key_is_configured).
+    """
+    key = get_openrouter_key()
+    if not key:
+        return None, None, False
+
+    cache = read_cache(OR_CACHE_PATH)
+    cached = cache.get("data")
+    cached_at = cache_ts(cache, "fetched_at")
+    failed_at = cache_ts(cache, "failed_at")
+    cache_age = (NOW - cached_at).total_seconds() if cached_at else None
+    fail_age = (NOW - failed_at).total_seconds() if failed_at else None
+    samples = cache.get("samples") or []
+
+    data, stale_err = None, None
+    skip_fetch = cached is not None and (
+        (cache_age is not None and cache_age < 90)
+        or (fail_age is not None and fail_age < 300)
+    )
+    if skip_fetch:
+        data = cached
+        if not (cache_age is not None and cache_age < 90):
+            stale_err = "rate-limited — backing off"
+    else:
+        try:
+            data = fetch_openrouter(key)
+            used_now = float((data.get("credits") or {}).get("total_usage") or 0.0)
+            samples.append([NOW.isoformat(), used_now])
+            cutoff = (NOW - dt.timedelta(days=7)).isoformat()
+            samples = [s for s in samples
+                       if len(s) == 2 and s[0] >= cutoff][-OR_SAMPLE_MAX:]
+            write_cache({"data": data, "fetched_at": NOW.isoformat(),
+                         "samples": samples}, OR_CACHE_PATH)
+        except urllib.error.HTTPError as e:
+            cache["failed_at"] = NOW.isoformat()
+            write_cache(cache, OR_CACHE_PATH)
+            data = cached
+            stale_err = (f"auth (HTTP {e.code})" if e.code in (401, 403)
+                         else "rate-limited (HTTP 429)" if e.code == 429
+                         else f"HTTP {e.code}")
+        except Exception as e:
+            cache["failed_at"] = NOW.isoformat()
+            write_cache(cache, OR_CACHE_PATH)
+            data = cached
+            stale_err = type(e).__name__
+
+    return analyze_openrouter(data, samples, NOW), stale_err, True
 
 
 def analyze(entry, window_h, now):
@@ -243,12 +396,15 @@ def main():
         return
 
     results = {key: analyze(data.get(key), wh, NOW) for key, _, wh, _ in WINDOWS}
+    or_a, or_stale_err, or_has_key = openrouter_status()
 
     weekly = results.get("seven_day")
     title = title_for(weekly)
     five = results.get("five_hour")
     if five and five["used"] >= 90:
         title += " ·5h⚠"
+    if or_a is not None:
+        title += " · OR ⛔" if or_a["depleted"] else f" · OR ${or_a['balance']:.2f}"
     line(title)
     line("---")
 
@@ -269,6 +425,10 @@ def main():
         line("---")
         line(f"Extra usage: {extra['used_credits']:.2f} of {extra.get('monthly_limit')} "
              f"{extra.get('currency', '')} used", size=12)
+
+    if or_has_key:
+        line("---")
+        render_openrouter(or_a, or_stale_err)
 
     line("---")
     note = f"Fetched {fetched_at.astimezone().strftime('%H:%M')}"

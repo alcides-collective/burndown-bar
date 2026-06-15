@@ -48,12 +48,43 @@ The first run triggers a macOS Keychain prompt (the plugin reads your Claude Cod
 - **Weekly limit (168 h)** — the one that actually ends your week. Drives the menu bar verdict.
 - **5-hour session** — shown alongside with its own mini-trajectory.
 - **Per-model weekly buckets** (Sonnet/Opus) and **extra-usage credits** — appear automatically when your plan reports them.
+- **OpenRouter credits** *(optional)* — your prepaid balance plus a spend trajectory, when you add a key (see below).
 
 For each window: percent used vs percent of time elapsed, burn rate in %/hour and %/day, pace as a multiple of the sustainable rate, and the verdict — either *projected usage at reset with headroom*, or *the hour you run dry and how long before the reset that is*.
 
+## OpenRouter credits (optional)
+
+If you also burn through [OpenRouter](https://openrouter.ai) credits, Burndown Bar can show those too. OpenRouter credits don't reset on a window — they're a prepaid balance that only drains — so the plugin snapshots your cumulative spend across runs and extrapolates **when the balance hits zero**:
+
+```
+OpenRouter — $12.34 left
+Pace: $0.85/day ($0.035/h)
+Balance empties in ~14.5 d at this pace
+```
+
+It also reports your remaining balance as a compact `· OR $12.34` chip in the menu bar.
+
+Point it at a key one of two ways (it checks them in this order):
+
+```sh
+# 1. environment variable
+export OPENROUTER_API_KEY=sk-or-v1-...
+
+# 2. a one-line key file (recommended for SwiftBar — see note below)
+mkdir -p ~/.config/burndown-bar
+printf '%s\n' "sk-or-v1-..." > ~/.config/burndown-bar/openrouter-key
+chmod 600 ~/.config/burndown-bar/openrouter-key
+```
+
+> **Use the key file for the menu bar.** SwiftBar launches plugins from a GUI context that doesn't read your `~/.zshrc`, so an `export`ed `OPENROUTER_API_KEY` won't reach the plugin there — the key file always will. The env var is handy when running the script yourself in a terminal.
+
+The key needs no special scope — a normal inference key works (it reads `/api/v1/credits`). Nothing is written anywhere except `openrouter.ai`. With no key configured, the OpenRouter section simply doesn't appear. The spend trajectory needs a little history to warm up; until then it just shows the balance.
+
 ## How it works
 
-Burndown Bar reads your Claude Code OAuth token from the macOS Keychain and polls the same usage endpoint that Claude Code's `/usage` command uses, every 5 minutes. Since the API reports each window's reset time, the window start is just `reset − 168h` (or 5 h) — which is what makes trajectory math possible at all. Nothing leaves your machine except that one HTTPS request to `api.anthropic.com`. No analytics, no third-party servers, no token refreshing (it never touches your refresh token — if the access token expires, it just tells you to run any Claude Code prompt).
+Burndown Bar reads your Claude Code OAuth token from the macOS Keychain and polls the same usage endpoint that Claude Code's `/usage` command uses, every 5 minutes. Since the API reports each window's reset time, the window start is just `reset − 168h` (or 5 h) — which is what makes trajectory math possible at all. Nothing leaves your machine except that one HTTPS request to `api.anthropic.com` (plus one to `openrouter.ai` if you've added an OpenRouter key). No analytics, no third-party servers, no token refreshing (it never touches your refresh token — if the access token expires, it just tells you to run any Claude Code prompt).
+
+OpenRouter has no reset window, so its trajectory works differently: each run records your account's cumulative spend (`total_usage`) with a timestamp in a local cache, and the dry-date is extrapolated from the spend rate over the last 24 h of those snapshots. Because cumulative spend only ever rises, the rate survives credit top-ups. Both fetches share the same throttle — fresh-enough cache is served without touching the network, and after an error the plugin backs off for five minutes.
 
 The projection is a deliberate simplification: it extrapolates your *average* pace across the whole window. Usage is bursty — you don't burn quota while you sleep — so treat "dry tomorrow 18:50" as a trend line, not a countdown clock.
 
