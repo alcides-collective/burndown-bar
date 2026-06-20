@@ -680,6 +680,96 @@ def test_summary_status_unchanged_without_smart():
     assert bb.claude_summary_status(weekly, {"label": "steady"}, None) == "dry"
 
 
+# ── detect_spend_surge: OpenRouter runaway-spend guard ─────────────────────
+# Baseline-free: compares the trailing-30min spend rate to the trailing-24h
+# rate and checks the surge would drain the balance fast. No learned history
+# needed, so it works the first time a bug strikes.
+
+def _steady(now, hours, rate, step_min=5, start=100.0):
+    """Cumulative-usage samples climbing at `rate` $/h up to `now`."""
+    base = now - dt.timedelta(hours=hours)
+    out, u, n = [], start, int(hours * 60 / step_min)
+    for i in range(n + 1):
+        out.append([(base + dt.timedelta(minutes=step_min * i)).isoformat(), u])
+        u += rate * (step_min / 60.0)
+    return out
+
+
+def test_detect_spend_surge_fires_on_runaway():
+    now = T("2026-06-20T12:00:00+00:00")
+    samples = _steady(now, 24.0, rate=0.5)          # steady ~$0.5/h
+    u = samples[-1][1]
+    for j in range(1, 7):                            # last 30 min: ~$40/h
+        samples.append([(now - dt.timedelta(minutes=30) + dt.timedelta(minutes=5 * j)).isoformat(),
+                         u + 3.3 * j])
+    s = bb.detect_spend_surge(samples, balance=50.0, now=now)
+    assert s is not None
+    assert s["factor"] >= 6.0 and s["runway_h"] <= 8.0
+
+
+def test_detect_spend_surge_quiet_on_steady_spend():
+    now = T("2026-06-20T12:00:00+00:00")
+    assert bb.detect_spend_surge(_steady(now, 24.0, rate=0.5), balance=50.0, now=now) is None
+
+
+def test_detect_spend_surge_ignores_brief_blip():
+    # one $1 blip inside the 30-min window averages to ~$2.4/h (<6x) -> quiet
+    now = T("2026-06-20T12:00:00+00:00")
+    samples = _steady(now, 23.5, rate=0.5)
+    u = samples[-1][1]
+    t0 = now - dt.timedelta(minutes=30)
+    for m, du in [(0, 0), (5, 1.0), (10, 1.04), (15, 1.08), (20, 1.12), (25, 1.16), (30, 1.20)]:
+        samples.append([(t0 + dt.timedelta(minutes=m)).isoformat(), u + du])
+    assert bb.detect_spend_surge(samples, balance=50.0, now=now) is None
+
+
+def test_detect_spend_surge_respects_min_rate_floor():
+    # big ratio but pennies/h and a tiny balance: still below the $/h floor
+    now = T("2026-06-20T12:00:00+00:00")
+    samples = _steady(now, 24.0, rate=0.01)
+    u = samples[-1][1]
+    for j in range(1, 7):
+        samples.append([(now - dt.timedelta(minutes=30) + dt.timedelta(minutes=5 * j)).isoformat(),
+                         u + 0.01 * j])
+    assert bb.detect_spend_surge(samples, balance=0.5, now=now) is None
+
+
+def test_detect_spend_surge_none_without_history():
+    now = T("2026-06-20T12:00:00+00:00")
+    assert bb.detect_spend_surge([["2026-06-20T11:55:00+00:00", 100.0]], 50.0, now) is None
+
+
+# ── notifications: urgent bypass + per-event cooldown ──────────────────────
+
+def test_notify_urgent_event_bypasses_quiet_hours():
+    ev = [{"key": "or-spend-surge", "urgent": True, "title": "t", "body": "b"}]
+    fire, state = bb.decide_notifications(ev, {}, N(3), quiet=(22, 8), cooldown_h=6.0)
+    assert [e["key"] for e in fire] == ["or-spend-surge"]
+    assert "or-spend-surge" in state
+
+
+def test_notify_nonurgent_still_muted_in_quiet_hours():
+    ev = [{"key": "claude-hot", "title": "t", "body": "b"}]
+    fire, _ = bb.decide_notifications(ev, {}, N(3), quiet=(22, 8), cooldown_h=6.0)
+    assert fire == []
+
+
+def test_notify_per_event_cooldown_overrides_default():
+    state = {"or-spend-surge": N(3).isoformat()}
+    ev = [{"key": "or-spend-surge", "urgent": True, "cooldown_h": 1.0, "title": "t", "body": "b"}]
+    within = bb.decide_notifications(ev, state, N(3, 30), quiet=(22, 8), cooldown_h=6.0)[0]
+    assert within == []                                   # 30 min < 1h cooldown
+    after = bb.decide_notifications(ev, state, N(4, 13), quiet=(22, 8), cooldown_h=6.0)[0]
+    assert [e["key"] for e in after] == ["or-spend-surge"]  # 73 min > 1h
+
+
+def test_title_shows_surge_glyph():
+    weekly = {"emoji": "🟢", "core": "proj 40%", "dir": 0}
+    openrouter = {"depleted": False, "balance": 8.0, "dir": 1, "warn": True, "surge": True}
+    title = bb.compose_title(weekly, None, openrouter)
+    assert "🚨" in title and "OR" in title
+
+
 # ── runner (stdlib only, no pytest) ───────────────────────────────────────
 
 if __name__ == "__main__":

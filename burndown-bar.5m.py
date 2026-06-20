@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # <xbar.title>Burndown Bar</xbar.title>
-# <xbar.version>v1.3.0</xbar.version>
+# <xbar.version>v1.4.0</xbar.version>
 # <xbar.author>Jakub Dudek</xbar.author>
 # <xbar.author.github>alcides-collective</xbar.author.github>
 # <xbar.desc>Not how much Claude quota you've used — how fast you're burning it. Pace vs sustainable, projected dry time vs reset.</xbar.desc>
@@ -48,6 +48,17 @@ TREND_WEEK_H = 168.0
 NOTIFY_COOLDOWN_H = 6.0      # same event won't re-notify within this span
 QUIET_HOURS = (22, 8)        # local-time window where notifications are muted
 OR_RUNWAY_WARN_H = 72.0      # ⚠ once the OpenRouter balance empties this soon
+
+# Runaway-spend guard: catch a bug burning OpenRouter credit abnormally fast.
+# Baseline-free — compares a short recent window to the trailing day, so it
+# works before any weekday/hour baseline exists. Fires (urgently, past quiet
+# hours) only when the surge is both far above normal AND materially fast.
+OR_SURGE_RECENT_H = 0.5      # "right now" spend window (trailing 30 min)
+OR_SURGE_BASELINE_H = 24.0   # "normal" reference window
+OR_SURGE_FACTOR = 6.0        # recent rate must be this many × normal
+OR_SURGE_RUNWAY_H = 8.0      # ...and burn through the balance this fast
+OR_SURGE_MIN_RATE = 1.0      # $/h floor so pennies-vs-pennies can't trip it
+OR_SURGE_COOLDOWN_H = 1.0    # re-warn at most hourly while still surging
 
 WINDOWS = [
     ("seven_day", "Weekly limit", 168.0, True),
@@ -168,7 +179,7 @@ def analyze_openrouter(data, samples, now):
     }
 
 
-def render_openrouter(a, stale_err=None):
+def render_openrouter(a, stale_err=None, surge=None):
     ok, hot, bad = "green,lime", "orange,orange", "red,red"
     if a is None:
         line("OpenRouter — no data", size=13, color=bad)
@@ -182,6 +193,10 @@ def render_openrouter(a, stale_err=None):
         line("OpenRouter — depleted", size=13, color=bad)
     else:
         line(f"OpenRouter — ${a['balance']:.2f} left", size=13)
+
+    if surge is not None:
+        line(f"🚨 Spend surge: ${surge['rate']:.2f}/h (~{surge['factor']:.0f}× normal)"
+             f" — empties in ~{fmt_dur(surge['runway_h'])}", size=13, color=bad)
 
     if a["rate"] is None:
         line("Spend rate: warming up — need a little history", size=12, color="gray,gray")
@@ -665,8 +680,9 @@ def compose_title(weekly, five, openrouter):
         if openrouter.get("depleted"):
             title += " · OR ⛔"
         else:
-            title += f" · OR ${openrouter['balance']:.2f}{trend_arrow(openrouter.get('dir', 0))}"
-            if openrouter.get("warn"):
+            surge = "🚨" if openrouter.get("surge") else ""
+            title += f" · OR {surge}${openrouter['balance']:.2f}{trend_arrow(openrouter.get('dir', 0))}"
+            if openrouter.get("warn") and not surge:
                 title += "⚠"
     return title
 
@@ -686,19 +702,26 @@ def in_quiet_hours(hour, quiet):
 
 
 def decide_notifications(events, state, now, quiet=(22, 8), cooldown_h=6.0):
-    """Return (events_to_fire, new_state). State maps event key -> last-fired iso."""
+    """Return (events_to_fire, new_state). State maps event key -> last-fired iso.
+
+    Events flagged ``urgent`` (e.g. a runaway-spend surge) fire even inside
+    quiet hours — a money emergency shouldn't wait until morning. An event may
+    carry its own ``cooldown_h`` to override the default.
+    """
     state = dict(state or {})
-    if in_quiet_hours(now.hour, quiet):
-        return [], state
+    quiet_now = in_quiet_hours(now.hour, quiet)
     fire, seen = [], set()
     for e in events:
+        if quiet_now and not e.get("urgent"):
+            continue
         k = e["key"]
         if k in seen:
             continue
         last = state.get(k)
+        cd = e.get("cooldown_h", cooldown_h)
         if last is not None:
             try:
-                if (now - dt.datetime.fromisoformat(last)).total_seconds() < cooldown_h * 3600:
+                if (now - dt.datetime.fromisoformat(last)).total_seconds() < cd * 3600:
                     continue
             except Exception:
                 pass
@@ -706,6 +729,33 @@ def decide_notifications(events, state, now, quiet=(22, 8), cooldown_h=6.0):
         fire.append(e)
         state[k] = now.isoformat()
     return fire, state
+
+
+def detect_spend_surge(samples, balance, now):
+    """Detect a runaway OpenRouter spend surge from cumulative-spend samples.
+
+    Returns {rate, baseline, factor, runway_h} when the trailing-30min spend
+    rate is both abnormally high (≥ OR_SURGE_FACTOR × the trailing-24h rate)
+    and materially fast (would empty ``balance`` within OR_SURGE_RUNWAY_H), or
+    None otherwise. Needs no learned baselines — just the raw spend trajectory —
+    so it can catch the first occurrence of a bug.
+    """
+    recent = spend_rate_over(samples, now, OR_SURGE_RECENT_H)
+    baseline = spend_rate_over(samples, now, OR_SURGE_BASELINE_H)
+    if recent is None or baseline is None:
+        return None
+    if recent < OR_SURGE_MIN_RATE:
+        return None
+    if recent <= 0 or balance <= 0:
+        return None
+    # A dead-quiet account suddenly spending is the clearest surge of all, so a
+    # zero baseline counts as an (effectively infinite) ratio rather than a skip.
+    factor = (recent / baseline) if baseline > 0 else float("inf")
+    runway_h = balance / recent
+    if factor >= OR_SURGE_FACTOR and runway_h <= OR_SURGE_RUNWAY_H:
+        return {"rate": recent, "baseline": baseline, "factor": factor,
+                "runway_h": runway_h}
+    return None
 
 
 def spend_rate_over(samples, now, hours):
@@ -1024,7 +1074,7 @@ def render_trend_rows(rows, weekday_name):
 
 
 def build_events(weekly, weekly_status, weekly_cls, or_a, or_cls, local_now,
-                 weekly_smart=None):
+                 weekly_smart=None, or_surge=None):
     """Candidate notifications; the state machine decides which actually fire."""
     events = []
     wd = local_now.strftime("%A")
@@ -1045,13 +1095,23 @@ def build_events(weekly, weekly_status, weekly_cls, or_a, or_cls, local_now,
             events.append({"key": "claude-weekly-spike",
                            "title": "Heavy Claude day",
                            "body": f"Weekly burn is well above your typical {wd}."})
+    # Runaway-spend surge: urgent, fires past quiet hours, baseline-free so it
+    # works the first time. Independent of the learned-trend block below.
+    if or_surge is not None:
+        events.append({"key": "or-spend-surge", "urgent": True,
+                       "cooldown_h": OR_SURGE_COOLDOWN_H,
+                       "title": "🚨 OpenRouter spend surge",
+                       "body": (f"${or_surge['rate']:.2f}/h, ~{or_surge['factor']:.0f}× your normal"
+                                f" — balance empties in ~{fmt_dur(or_surge['runway_h'])}."
+                                " Runaway process?")})
     if or_a is not None and or_cls is not None:
         if or_a["depleted"]:
             events.append({"key": "or-depleted",
                            "title": "OpenRouter out of credit",
                            "body": "Balance is spent."})
         else:
-            if or_cls["label"] == "sharply up":
+            # The gentle "above typical" spike is redundant during a surge.
+            if or_cls["label"] == "sharply up" and or_surge is None:
                 events.append({"key": "or-spend-spike",
                                "title": "OpenRouter spend spiked",
                                "body": f"Spending well above your typical {wd}."})
@@ -1164,10 +1224,13 @@ def main():
         trends[key] = t
 
     or_trend = None
+    or_surge = None
     if or_has_key:
         or_store = baselines.setdefault("openrouter", {})
         or_trend = trend_for(lambda h: spend_rate_over(or_samples, NOW, h), or_store, local_now)
         commit_baseline(history, "openrouter", or_trend["recent"], local_now)
+        if or_a is not None and not or_a["depleted"]:
+            or_surge = detect_spend_surge(or_samples, or_a["balance"], NOW)
 
     weekly = results.get("seven_day")
     weekly_cls = trends["seven_day"]["cls"]
@@ -1196,6 +1259,7 @@ def main():
     if or_a is not None:
         or_t = {"depleted": or_a["depleted"], "balance": or_a["balance"],
                 "dir": (or_trend["cls"]["dir"] if or_trend else 0),
+                "surge": or_surge is not None,
                 "warn": (or_a.get("dry_in_h") is not None
                          and or_a["dry_in_h"] < OR_RUNWAY_WARN_H)}
     line(compose_title(weekly_t, five_t, or_t))
@@ -1253,7 +1317,7 @@ def main():
 
     if or_has_key:
         line("---")
-        render_openrouter(or_a, or_stale_err)
+        render_openrouter(or_a, or_stale_err, surge=or_surge)
 
     def _event_age_h(e):
         try:
@@ -1274,7 +1338,7 @@ def main():
     fire_notifications(history, build_events(
         weekly, weekly_status, weekly_cls, or_a,
         (or_trend["cls"] if or_trend else None), local_now,
-        weekly_smart=weekly_smart), local_now)
+        weekly_smart=weekly_smart, or_surge=or_surge), local_now)
     notify_recent = [e for e in history.get("limit_events", []) if _event_age_h(e) <= 24.0]
     for e in pending_limit_notifications(history, notify_recent, local_now):
         title = ("Fresh quota" if e["kind"] == "reset_early" else "Limit raised")
