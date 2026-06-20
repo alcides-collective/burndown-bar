@@ -95,6 +95,17 @@ Balance empties in ~14.5 d at this pace
 
 It also reports your remaining balance as a compact `· OR $12.34` chip in the menu bar.
 
+### Runaway-spend alarm
+
+OpenRouter credit is *real prepaid money*, so a buggy or runaway process can quietly burn through it far faster than you'd ever spend on purpose. Burndown Bar watches for exactly that — it compares your spend over the last half hour against your trailing-24h normal, and fires a **🚨 spend surge** alarm when the rate jumps well above normal *and* would empty the balance fast:
+
+```
+🚨 OpenRouter spend surge
+$48.20/h, ~70× your normal — balance empties in ~14 min. Runaway process?
+```
+
+It's deliberately hard to false-trip: a brief burst (a one-off batch job) gets averaged out over the 30-minute window, so the alarm only fires on a *sustained* surge that's both abnormal and materially fast. It needs no learned history — it works off the raw spend trajectory — so it can catch a bug the very first time it happens. And because a money leak at 3am is precisely when you can't see it, the surge alarm is the one notification that **overrides quiet hours** (with a short cooldown so it nudges rather than nags). A 🚨 also appears on the menu-bar chip while it's surging. The thresholds (`OR_SURGE_FACTOR`, `OR_SURGE_RUNWAY_H`, and friends) are constants near the top of the file if you want to tune the sensitivity.
+
 Point it at a key one of two ways (it checks them in this order):
 
 ```sh
@@ -140,7 +151,7 @@ Run any prompt in Claude Code; it refreshes the token itself, then hit Refresh i
 Yes. It rides the same undocumented endpoint Claude Code uses internally. If Anthropic changes it, the plugin will show an error until patched — open an issue and it'll get fixed.
 
 **Can I turn off the notifications (or change quiet hours)?**
-They only fire on genuinely notable shifts, with a cooldown, and stay silent 22:00–08:00. To tune or disable them, edit the constants near the top of the file — `NOTIFY_COOLDOWN_H`, `QUIET_HOURS`, and the `*_Z` thresholds — or mute *Burndown Bar* in macOS System Settings → Notifications.
+They only fire on genuinely notable shifts, with a cooldown, and stay silent 22:00–08:00 — with one exception: an OpenRouter spend surge overrides quiet hours, because a money leak overnight is the whole point of catching it. To tune or disable them, edit the constants near the top of the file — `NOTIFY_COOLDOWN_H`, `QUIET_HOURS`, the `*_Z` thresholds, and the `OR_SURGE_*` thresholds — or mute *Burndown Bar* in macOS System Settings → Notifications.
 
 **The trends say "still building history" — is something wrong?**
 No. The baseline learns from your own usage, so it needs data first. Hour- and day-level trends appear within a day; week-over-week after about two weeks.

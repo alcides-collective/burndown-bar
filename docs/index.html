@@ -98,6 +98,13 @@ vs typical week:      -4%</pre>
       <dd>Add a key and it tracks your prepaid balance and extrapolates when it hits zero, surviving
       top-ups because it reads cumulative spend.</dd>
 
+      <dt>Catches a runaway spending bug</dt>
+      <dd>OpenRouter credit is real money, so a buggy process can burn it fast. When spend over the
+      last half hour jumps well above your normal <em>and</em> would drain the balance quickly, a
+      &#x1F6A8; surge alarm fires &mdash; and because a leak at 3am is exactly when you can't see it,
+      this one overrides quiet hours. Brief one-off bursts are averaged out, so it only trips on a
+      sustained surge.</dd>
+
       <dt>Private, and one file</dt>
       <dd>Stdlib-only Python, no dependencies, auditable in five minutes. Nothing leaves your machine
       but the same usage request Claude Code already makes.</dd>
