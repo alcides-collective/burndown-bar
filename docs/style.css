@@ -1,0 +1,208 @@
+/* GitHub Primer-ish palette. Light by default, dark to match the system and
+   the project's social card. Solid colors only — no gradients, no glows. */
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f6f8fa;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --muted: #59636e;
+  --link: #0969da;
+  --btn: #1f883d;
+  --btn-text: #ffffff;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --hot: #cf222e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117;
+    --bg-soft: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --link: #58a6ff;
+    --btn: #238636;
+    --btn-text: #ffffff;
+    --ok: #3fb950;
+    --warn: #d29922;
+    --hot: #ff7b72;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 64px 24px 96px;
+}
+
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+code, pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+code {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.1em 0.4em;
+  font-size: 0.88em;
+}
+
+/* ── Hero ─────────────────────────────────────────────── */
+.hero { padding-bottom: 8px; }
+h1 {
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  margin: 0 0 8px;
+}
+.tagline {
+  font-size: 21px;
+  color: var(--muted);
+  margin: 0 0 28px;
+  max-width: 36ch;
+}
+
+.bar {
+  display: inline-block;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 18px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow-x: auto;
+  max-width: 100%;
+}
+.bar .sep { margin-left: 10px; }
+.up { color: var(--hot); }
+.down { color: var(--ok); }
+
+.actions { margin-top: 28px; display: flex; gap: 12px; flex-wrap: wrap; }
+.btn {
+  display: inline-block;
+  padding: 8px 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg-soft);
+}
+.btn:hover { text-decoration: none; border-color: var(--muted); }
+.btn.primary {
+  background: var(--btn);
+  border-color: var(--btn);
+  color: var(--btn-text);
+}
+.btn.primary:hover { filter: brightness(1.05); border-color: var(--btn); }
+
+/* ── Sections ─────────────────────────────────────────── */
+section { margin-top: 56px; }
+h2 {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+p { margin: 0 0 16px; }
+
+/* Burn-state legend — meaningful states, with text, not decoration. */
+.legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  color: var(--muted);
+  font-size: 16px;
+}
+.legend li { display: flex; align-items: center; gap: 8px; }
+.dot { font-size: 13px; line-height: 1; }
+.dot.ok { color: var(--ok); }
+.dot.warn { color: var(--warn); }
+.dot.hot { color: var(--hot); }
+
+/* Product "screenshot" of the dropdown. */
+.screen {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  overflow-x: auto;
+  color: var(--text);
+}
+.screen b { font-weight: 700; }
+
+/* Features as a description list, not a card grid. */
+.features { margin: 0; }
+.features dt {
+  font-weight: 700;
+  font-size: 18px;
+  margin-top: 24px;
+}
+.features dt:first-child { margin-top: 0; }
+.features dd {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+/* Install command. */
+.code-block { position: relative; }
+.code-block pre {
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 20px;
+  overflow-x: auto;
+  font-size: 13.5px;
+  line-height: 1.55;
+  margin: 0;
+}
+.copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 5px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.copy:hover { border-color: var(--muted); }
+
+/* ── Footer ───────────────────────────────────────────── */
+footer {
+  margin-top: 72px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 15px;
+}
+
+@media (max-width: 600px) {
+  main { padding: 40px 18px 72px; }
+  h1 { font-size: 36px; }
+  .tagline { font-size: 19px; }
+}

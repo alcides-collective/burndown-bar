@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Burndown Bar — how fast you're burning Claude quota</title>
+<meta name="description" content="A macOS menu bar plugin that tells you not how much Claude quota you've used, but how fast you're burning it — pace vs sustainable, projected dry time vs reset, and trends against your own usual.">
+<meta property="og:title" content="Burndown Bar">
+<meta property="og:description" content="Not how much Claude quota you've used — how fast you're burning it.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+
+  <header class="hero">
+    <h1>Burndown Bar</h1>
+    <p class="tagline">Not how much Claude quota you've used &mdash; how fast you're burning it.</p>
+
+    <div class="bar" role="img" aria-label="Menu bar reading: 1.12 times sustainable pace, weekly projected 88 percent and trending up, 5-hour session up, OpenRouter 12 dollars 34 and spend easing">
+      <span class="dot warn">&#x1F7E1;</span> 1.12&times; &middot; proj 88%<span class="up">&uarr;</span>
+      <span class="sep">5h<span class="up">&uarr;</span></span>
+      &middot; OR $12.34<span class="down">&darr;</span>
+    </div>
+
+    <div class="actions">
+      <a class="btn primary" href="#install">Install</a>
+      <a class="btn" href="https://github.com/alcides-collective/burndown-bar">View on GitHub</a>
+    </div>
+  </header>
+
+  <section>
+    <p>Every Claude usage monitor tells you the level: <code>76% used</code>. Burndown Bar tells you
+    the slope. 76% on its own means nothing. 76% with only 69% of the week elapsed means you run
+    dry Friday night and the reset isn't until Saturday afternoon &mdash; and that is the sentence
+    your menu bar shows at a glance.</p>
+
+    <ul class="legend">
+      <li><span class="dot ok">&#x1F7E2;</span> sustainable pace</li>
+      <li><span class="dot warn">&#x1F7E1;</span> tight</li>
+      <li><span class="dot hot">&#x1F525;</span> won't reach the reset</li>
+      <li><span class="dot">&#x26D4;</span> already hit</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>What the dropdown shows</h2>
+    <pre class="screen" aria-label="Example dropdown contents">
+<b>&#x1F7E1; 1.12&times; &middot; proj 88%&uarr;  5h&uarr; &middot; OR $12.34&darr;</b>
+&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;
+You're heavier than your typical Friday on Claude, but
+there's still room &mdash; only 77% of the week gone. Spend's
+eased on OpenRouter; $12.34 now stretches ~15 d.
+&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;
+Weekly limit &mdash; 77% used
+Elapsed: 4.8 d of 7.0 d window (69% of the time)
+Pace: 1.12&times; sustainable (0.67%/h &asymp; 16.0%/day)
+Runs dry tomorrow 18:50 &mdash; 18.2 h BEFORE reset
+Resets Sat Jun 13, 13:00 (in 2.2 d)
+vs typical this hour: +38%
+vs typical Friday:    +12%
+vs typical week:      -4%</pre>
+  </section>
+
+  <section>
+    <h2>What it does</h2>
+    <dl class="features">
+      <dt>Reads the trajectory, not the number</dt>
+      <dd>For each window &mdash; weekly, 5-hour, per-model &mdash; it works out your burn rate, your
+      pace against the sustainable rate, and either the headroom you'll land with at reset or the
+      hour you run dry and how far that falls before the reset.</dd>
+
+      <dt>Trends against your own usual</dt>
+      <dd>It quietly records a snapshot each run and learns your rhythm &mdash; what a typical Tuesday
+      afternoon looks like, apart from a typical Saturday morning &mdash; then reports the present
+      against it: arrows in the menu bar and a two-sentence plain-English summary up top. No model,
+      no API; just your history and arithmetic. A trend is only called when the rate is genuinely
+      out of line with your own variance, so ordinary noise stays quiet.</dd>
+
+      <dt>Notifications when something actually shifts</dt>
+      <dd>A heavy day, a spend spike, a balance about to run dry. Each fires once, with a cooldown,
+      and nothing arrives between 22:00 and 08:00.</dd>
+
+      <dt>Catches it when Anthropic moves your limits</dt>
+      <dd>Early resets and quiet mid-window quota bumps are detected from the usage stream, logged in
+      the dropdown, and &mdash; importantly &mdash; left out of your learned baseline, so a holiday
+      grant never becomes your new normal.</dd>
+
+      <dt>OpenRouter credits, optionally</dt>
+      <dd>Add a key and it tracks your prepaid balance and extrapolates when it hits zero, surviving
+      top-ups because it reads cumulative spend.</dd>
+
+      <dt>Private, and one file</dt>
+      <dd>Stdlib-only Python, no dependencies, auditable in five minutes. Nothing leaves your machine
+      but the same usage request Claude Code already makes.</dd>
+    </dl>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p>Requires macOS, <a href="https://github.com/swiftbar/SwiftBar">SwiftBar</a>, and a Claude
+    Pro or Max subscription with <a href="https://code.claude.com">Claude Code</a> logged in.</p>
+
+    <div class="code-block">
+      <pre id="install-cmd">brew install swiftbar   # if you don't have it yet
+curl -fsSL https://raw.githubusercontent.com/alcides-collective/burndown-bar/main/burndown-bar.5m.py \
+  -o "$(defaults read com.ameba.SwiftBar PluginDirectory)/burndown-bar.5m.py" \
+  &amp;&amp; chmod +x "$(defaults read com.ameba.SwiftBar PluginDirectory)/burndown-bar.5m.py"</pre>
+      <button class="copy" type="button" data-target="install-cmd">Copy</button>
+    </div>
+
+    <p>The first run shows one macOS Keychain prompt &mdash; the plugin reads your Claude Code token
+    via the system <code>security</code> tool. Click <strong>Always Allow</strong> once and you're
+    done. Trends say &ldquo;still building history&rdquo; until enough snapshots accumulate; hour and
+    day comparisons appear within a day, week-over-week after about two weeks.</p>
+  </section>
+
+  <footer>
+    <a href="https://github.com/alcides-collective/burndown-bar">GitHub</a> &middot;
+    <a href="https://github.com/alcides-collective/burndown-bar/blob/main/LICENSE">MIT</a> &middot;
+    by <a href="https://github.com/alcides-collective">alcides-collective</a>
+  </footer>
+
+</main>
+<script src="app.js"></script>
+</body>
+</html>

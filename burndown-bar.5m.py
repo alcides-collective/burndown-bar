@@ -5,7 +5,7 @@
 # <xbar.author.github>alcides-collective</xbar.author.github>
 # <xbar.desc>Not how much Claude quota you've used — how fast you're burning it. Pace vs sustainable, projected dry time vs reset.</xbar.desc>
 # <xbar.dependencies>python3</xbar.dependencies>
-# <xbar.abouturl>https://burndown.bar</xbar.abouturl>
+# <xbar.abouturl>https://alcides-collective.github.io/burndown-bar/</xbar.abouturl>
 # <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 # <swiftbar.refreshOnOpen>true</swiftbar.refreshOnOpen>
 
