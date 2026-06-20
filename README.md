@@ -11,16 +11,23 @@
 
 </div>
 
-Every Claude usage monitor tells you the level: `76% used`. Burndown Bar tells you the slope:
+Every Claude usage monitor tells you the level: `76% used`. Burndown Bar tells you the slope — and now, whether that slope is unusual *for you*:
 
 ```
-🔥 1.12× → dry tomorrow 18:50
+🟡 1.12× · proj 88%↑ 5h↑ · OR $12.34↓
+─────────────────────────────────────────────────────
+You're heavier than your typical Friday on Claude, but
+there's still room — only 77% of the week gone. Spend's
+eased on OpenRouter; $12.34 now stretches ~15 d.
 ─────────────────────────────────────────────────────
 Weekly limit — 77% used
 Elapsed: 4.8 d of 7.0 d window (69% of the time)
 Pace: 1.12× sustainable (0.67%/h ≈ 16.0%/day)
 Runs dry tomorrow 18:50 — 18.2 h BEFORE reset
 Resets Sat Jun 13, 13:00 (in 2.2 d)
+vs typical this hour: +38%
+vs typical Friday:    +12%
+vs typical week:      -4%
 ─────────────────────────────────────────────────────
 5-hour session — 29% used
 Pace: 0.78× sustainable
@@ -29,6 +36,8 @@ Resets today 11:30 (in 3.1 h)
 ```
 
 76% used means nothing on its own. 76% used with only 69% of the window elapsed means you run dry Friday night and the reset isn't until Saturday afternoon. That second sentence is the one you need, and it's the one your menu bar shows at a glance: 🟢 sustainable pace, 🟡 tight, 🔥 you won't make it to the reset (and when you'll hit the wall), ⛔ already hit.
+
+The arrows are the next layer: `↑`/`↓` next to each signal mean today's burn is running heavier or lighter than *your own typical* for this weekday and hour. A plain-English, two-sentence summary sits at the top of the dropdown, and a macOS notification fires when something genuinely shifts — no LLM, just your history and some arithmetic.
 
 ## Install
 
@@ -51,6 +60,27 @@ The first run triggers a macOS Keychain prompt (the plugin reads your Claude Cod
 - **OpenRouter credits** *(optional)* — your prepaid balance plus a spend trajectory, when you add a key (see below).
 
 For each window: percent used vs percent of time elapsed, burn rate in %/hour and %/day, pace as a multiple of the sustainable rate, and the verdict — either *projected usage at reset with headroom*, or *the hour you run dry and how long before the reset that is*.
+
+## Trends, in plain English
+
+Levels and pace tell you where you are. Trends tell you whether *this* is normal for you. Burndown Bar quietly records a snapshot every run and learns your rhythm — what a typical Tuesday 3pm looks like, separate from a typical Saturday morning — then reports the present against it:
+
+- **A two-sentence summary** at the top of the dropdown, written from hand-built templates (no LLM, nothing leaves your machine). The wording rotates so it doesn't read like a robot, but the numbers are exact.
+- **Trend arrows in the menu bar** — `↑`/`↓` on the weekly pace, the 5-hour session, and OpenRouter spend, each comparing now to your typical for this weekday and hour.
+- **Baseline-relative rows** under the weekly window: `vs typical this hour`, `vs typical <weekday>`, `vs typical week`.
+- **Notifications** when a shift is genuinely notable — a heavy day, a spend spike, a balance about to run dry. They respect a per-event cooldown, collapse duplicates, and stay quiet overnight (22:00–08:00 local).
+
+A trend is only called when the current rate is statistically out of line with your own history (a z-score past ~1.5σ), so normal day-to-day noise doesn't trip it. Everything degrades gracefully: on a fresh install it says *"still building history,"* hour- and day-level trends appear within a day, and week-over-week kicks in after about two weeks of data. History lives in a single local cache file and is capped and aged automatically.
+
+## When Anthropic moves your limits
+
+Anthropic sometimes resets a window early, or quietly raises a limit (special events, holiday grants). Burndown Bar spots both from the usage stream — an **early reset** (the window rolls over before its scheduled time) or a **limit raised** (your utilization drops with no scheduled reset) — and:
+
+- logs them in a **Limit events (Anthropic)** section in the dropdown,
+- fires a one-time heads-up notification (*"Fresh quota — Anthropic reset your weekly limit early"*),
+- and, crucially, **excludes those abnormal periods from your learned baseline**, so a Christmas binge or a surprise grant never becomes your new "typical." Readings that are wildly out of range, or that land within ~48 h of a detected event, are recorded but not learned from.
+
+This is fully automatic — there's nothing to configure.
 
 ## OpenRouter credits (optional)
 
@@ -88,6 +118,8 @@ OpenRouter has no reset window, so its trajectory works differently: each run re
 
 The projection is a deliberate simplification: it extrapolates your *average* pace across the whole window. Usage is bursty — you don't burn quota while you sleep — so treat "dry tomorrow 18:50" as a trend line, not a countdown clock.
 
+The trend layer adds one more local file: a rolling history of utilization snapshots plus a learned baseline of your burn rate, bucketed by weekday and hour. Sparse buckets borrow strength from broader ones (an empirical-Bayes shrinkage toward the hour-of-day and overall averages), so trends are usable long before every weekday/hour cell is full. Burn rate is reconstructed from the snapshot deltas, stitching across window resets so a reset never looks like a usage cliff. Notifications are sent via `osascript` (a standard macOS notification); the same file remembers what's already been announced so nothing nags you twice. None of this touches the network — it's all derived from the readings you'd be fetching anyway.
+
 ## Why
 
 I kept getting the "you've reached your weekly limit" wall mid-task, despite glancing at `/usage` regularly. The number was never the problem — 76% sounds fine. What I could never do in my head was the second step: *76% of budget in 69% of the window means 16 hours of darkness before Saturday's reset*. So I made the menu bar do that math, permanently.
@@ -105,6 +137,12 @@ Run any prompt in Claude Code; it refreshes the token itself, then hit Refresh i
 
 **Can this break?**
 Yes. It rides the same undocumented endpoint Claude Code uses internally. If Anthropic changes it, the plugin will show an error until patched — open an issue and it'll get fixed.
+
+**Can I turn off the notifications (or change quiet hours)?**
+They only fire on genuinely notable shifts, with a cooldown, and stay silent 22:00–08:00. To tune or disable them, edit the constants near the top of the file — `NOTIFY_COOLDOWN_H`, `QUIET_HOURS`, and the `*_Z` thresholds — or mute *Burndown Bar* in macOS System Settings → Notifications.
+
+**The trends say "still building history" — is something wrong?**
+No. The baseline learns from your own usage, so it needs data first. Hour- and day-level trends appear within a day; week-over-week after about two weeks.
 
 **Why a single Python file instead of a real app?**
 Because your quota monitor shouldn't have a quota of its own. One file, stdlib only, auditable in five minutes.
