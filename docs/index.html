@@ -17,8 +17,8 @@
     <h1>Burndown Bar</h1>
     <p class="tagline">Not how much Claude quota you've used &mdash; how fast you're burning it.</p>
 
-    <div class="bar" role="img" aria-label="Menu bar reading: 1.12 times sustainable pace, weekly projected 88 percent and trending up, 5-hour session up, OpenRouter 12 dollars 34 and spend easing">
-      <span class="dot warn">&#x1F7E1;</span> 1.12&times; &middot; proj 88%<span class="up">&uarr;</span>
+    <div class="bar" role="img" aria-label="Menu bar reading: weekly projected 88 percent at reset and trending up, 5-hour session up, OpenRouter 12 dollars 34 and spend easing">
+      <span class="dot warn">&#x1F7E1;</span> proj 88%<span class="up">&uarr;</span>
       <span class="sep">5h<span class="up">&uarr;</span></span>
       &middot; OR $12.34<span class="down">&darr;</span>
     </div>
@@ -46,7 +46,7 @@
   <section>
     <h2>What the dropdown shows</h2>
     <pre class="screen" aria-label="Example dropdown contents">
-<b>&#x1F7E1; 1.12&times; &middot; proj 88%&uarr;  5h&uarr; &middot; OR $12.34&darr;</b>
+<b>&#x1F7E1; proj 88%&uarr;  5h&uarr; &middot; OR $12.34&darr;</b>
 &#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;
 You're heavier than your typical Friday on Claude, but
 there's still room &mdash; only 77% of the week gone. Spend's
@@ -57,6 +57,7 @@ Elapsed: 4.8 d of 7.0 d window (69% of the time)
 Pace: 1.12&times; sustainable (0.67%/h &asymp; 16.0%/day)
 Runs dry tomorrow 18:50 &mdash; 18.2 h BEFORE reset
 Resets Sat Jun 13, 13:00 (in 2.2 d)
+Smart projection: ~88% at reset &mdash; fits, 12% headroom (learned rhythm)
 vs typical this hour: +38%
 vs typical Friday:    +12%
 vs typical week:      -4%</pre>
@@ -69,6 +70,13 @@ vs typical week:      -4%</pre>
       <dd>For each window &mdash; weekly, 5-hour, per-model &mdash; it works out your burn rate, your
       pace against the sustainable rate, and either the headroom you'll land with at reset or the
       hour you run dry and how far that falls before the reset.</dd>
+
+      <dt>A smart projection that knows your rhythm</dt>
+      <dd>A straight-line projection assumes you burn through the night and the weekend &mdash; you
+      don't. The weekly window's smart projection walks the hours left to reset and applies your
+      <em>own</em> learned burn for each weekday and hour, so a busy afternoon isn't mistaken for a
+      runaway week. It's the figure the menu bar leads with; the plain projection stays in the
+      dropdown beside it. Thin on history? It falls back to your recent pace and says so.</dd>
 
       <dt>Trends against your own usual</dt>
       <dd>It quietly records a snapshot each run and learns your rhythm &mdash; what a typical Tuesday

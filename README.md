@@ -14,7 +14,7 @@
 Every Claude usage monitor tells you the level: `76% used`. Burndown Bar tells you the slope — and now, whether that slope is unusual *for you*:
 
 ```
-🟡 1.12× · proj 88%↑ 5h↑ · OR $12.34↓
+🟡 proj 88%↑ 5h↑ · OR $12.34↓
 ─────────────────────────────────────────────────────
 You're heavier than your typical Friday on Claude, but
 there's still room — only 77% of the week gone. Spend's
@@ -25,6 +25,7 @@ Elapsed: 4.8 d of 7.0 d window (69% of the time)
 Pace: 1.12× sustainable (0.67%/h ≈ 16.0%/day)
 Runs dry tomorrow 18:50 — 18.2 h BEFORE reset
 Resets Sat Jun 13, 13:00 (in 2.2 d)
+Smart projection: ~88% at reset — fits, 12% headroom (learned rhythm)
 vs typical this hour: +38%
 vs typical Friday:    +12%
 vs typical week:      -4%
@@ -35,7 +36,7 @@ Projected at reset: 78% — fits with 22% headroom
 Resets today 11:30 (in 3.1 h)
 ```
 
-76% used means nothing on its own. 76% used with only 69% of the window elapsed means you run dry Friday night and the reset isn't until Saturday afternoon. That second sentence is the one you need, and it's the one your menu bar shows at a glance: 🟢 sustainable pace, 🟡 tight, 🔥 you won't make it to the reset (and when you'll hit the wall), ⛔ already hit.
+76% used means nothing on its own. 76% with only 69% of the window elapsed *sounds* like you run dry before the reset — but a naïve straight-line projection assumes you keep burning at that pace straight through the night and the weekend, which you don't. So Burndown Bar leads with a **smart projection**: it walks the hours left in the window and applies *your own* learned burn for each weekday and hour, so a busy afternoon isn't mistaken for a runaway week. That projected-at-reset figure is the headline your menu bar shows at a glance: 🟢 sustainable, 🟡 tight, 🔥 you won't make it (and when you'll hit the wall), ⛔ already hit.
 
 The arrows are the next layer: `↑`/`↓` next to each signal mean today's burn is running heavier or lighter than *your own typical* for this weekday and hour. A plain-English, two-sentence summary sits at the top of the dropdown, and a macOS notification fires when something genuinely shifts — no LLM, just your history and some arithmetic.
 
@@ -59,7 +60,7 @@ The first run triggers a macOS Keychain prompt (the plugin reads your Claude Cod
 - **Per-model weekly buckets** (Sonnet/Opus) and **extra-usage credits** — appear automatically when your plan reports them.
 - **OpenRouter credits** *(optional)* — your prepaid balance plus a spend trajectory, when you add a key (see below).
 
-For each window: percent used vs percent of time elapsed, burn rate in %/hour and %/day, pace as a multiple of the sustainable rate, and the verdict — either *projected usage at reset with headroom*, or *the hour you run dry and how long before the reset that is*.
+For each window: percent used vs percent of time elapsed, burn rate in %/hour and %/day, pace as a multiple of the sustainable rate, and the verdict — either *projected usage at reset with headroom*, or *the hour you run dry and how long before the reset that is*. The weekly window adds the **smart projection** — a separate, baseline-aware estimate of where you'll land at reset that models your daily rhythm rather than holding the current pace flat. Both are shown side by side, so you can see the simple straight-line read and the rhythm-aware one at once.
 
 ## Trends, in plain English
 
@@ -116,9 +117,9 @@ Burndown Bar reads your Claude Code OAuth token from the macOS Keychain and poll
 
 OpenRouter has no reset window, so its trajectory works differently: each run records your account's cumulative spend (`total_usage`) with a timestamp in a local cache, and the dry-date is extrapolated from the spend rate over the last 24 h of those snapshots. Because cumulative spend only ever rises, the rate survives credit top-ups. Both fetches share the same throttle — fresh-enough cache is served without touching the network, and after an error the plugin backs off for five minutes.
 
-The projection is a deliberate simplification: it extrapolates your *average* pace across the whole window. Usage is bursty — you don't burn quota while you sleep — so treat "dry tomorrow 18:50" as a trend line, not a countdown clock.
+There are two projections, by design. The plain one extrapolates your *average* pace across the whole window — simple and transparent, but it over-counts, because usage is bursty and you don't burn quota while you sleep. The **smart projection** corrects for exactly that: it walks each remaining clock-hour to the reset and adds your *learned typical burn* for that weekday and hour, so quiet nights and weekends are modelled from your own history instead of assumed away. Until a given hour-of-day has enough readings to trust, that hour falls back to your recent pace — the dropdown labels which it's using (*learned rhythm* vs *recent pace*), and the menu-bar headline follows the smart figure. On a fresh install, with no rhythm learned yet, the two projections agree; they diverge as the baseline fills in.
 
-The trend layer adds one more local file: a rolling history of utilization snapshots plus a learned baseline of your burn rate, bucketed by weekday and hour. Sparse buckets borrow strength from broader ones (an empirical-Bayes shrinkage toward the hour-of-day and overall averages), so trends are usable long before every weekday/hour cell is full. Burn rate is reconstructed from the snapshot deltas, stitching across window resets so a reset never looks like a usage cliff. Notifications are sent via `osascript` (a standard macOS notification); the same file remembers what's already been announced so nothing nags you twice. None of this touches the network — it's all derived from the readings you'd be fetching anyway.
+The trend layer adds one more local file: a rolling history of utilization snapshots plus a learned baseline of your burn rate, bucketed by weekday and hour. Sparse buckets borrow strength from broader ones (an empirical-Bayes shrinkage toward the hour-of-day and overall averages), so trends are usable long before every weekday/hour cell is full. Burn rate is reconstructed from the snapshot deltas, stitching across window resets so a reset never looks like a usage cliff — and the reset boundary is matched with a small tolerance, because the usage API recomputes each window's reset time on every poll and it jitters by a second or two, which would otherwise read as a fresh reset on most intervals and starve this math. Notifications are sent via `osascript` (a standard macOS notification); the same file remembers what's already been announced so nothing nags you twice. None of this touches the network — it's all derived from the readings you'd be fetching anyway.
 
 ## Why
 
