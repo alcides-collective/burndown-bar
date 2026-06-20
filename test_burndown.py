@@ -514,6 +514,172 @@ def test_pending_limit_notifications_muted_in_quiet_hours():
     assert "limit_notified" not in history or not history["limit_notified"]  # retry later
 
 
+# ── same_reset: resets_at jitter tolerance (the bug fix) ───────────────────
+# The usage API recomputes resets_at as (now + window) on every poll, so the
+# stored value carries sub-second-to-second jitter — which can straddle a
+# minute/hour boundary (10:59:59.9 vs 11:00:00.1) and look like a fresh reset.
+
+def test_same_reset_collapses_subsecond_jitter():
+    assert bb.same_reset("2026-06-27T10:59:59.892718+00:00",
+                         "2026-06-27T11:00:00.763660+00:00") is True
+
+
+def test_same_reset_distinguishes_real_rollover():
+    assert bb.same_reset("2026-06-20T11:00:00+00:00",
+                         "2026-06-27T11:00:00+00:00") is False
+
+
+def test_windowed_rate_survives_resets_at_jitter():
+    # same window throughout, but resets_at jitters across the minute boundary
+    # each poll. Pre-fix every interval is dropped as a "reset" -> None.
+    snaps = [
+        ["2026-06-20T10:00:00+00:00", 10.0, "2026-06-27T10:59:59.900000+00:00"],
+        ["2026-06-20T11:00:00+00:00", 13.0, "2026-06-27T11:00:00.100000+00:00"],
+        ["2026-06-20T12:00:00+00:00", 16.0, "2026-06-27T10:59:59.800000+00:00"],
+    ]
+    assert bb.windowed_rate(snaps, T("2026-06-20T12:00:00+00:00"), 24.0) == 3.0
+
+
+def test_rates_from_snapshots_survive_jitter():
+    snaps = [
+        ["2026-06-20T10:00:00+00:00", 10.0, "2026-06-27T10:59:59.900000+00:00"],
+        ["2026-06-20T11:00:00+00:00", 13.0, "2026-06-27T11:00:00.100000+00:00"],
+    ]
+    assert bb.rates_from_snapshots(snaps) == [(T("2026-06-20T11:00:00+00:00"), 3.0)]
+
+
+def test_detect_limit_events_ignores_resets_at_jitter():
+    # jitter must not masquerade as an early reset
+    snaps = [
+        ["2026-06-20T11:00:00+00:00", 18.0, "2026-06-27T10:59:59.900000+00:00"],
+        ["2026-06-20T11:05:00+00:00", 19.0, "2026-06-27T11:00:00.100000+00:00"],
+    ]
+    assert bb.detect_limit_events(snaps) == []
+
+
+# ── smart_projection: baseline-aware integral to reset ─────────────────────
+# Instead of holding the whole-window average rate flat (which a front-loaded
+# spike inflates), walk each remaining hour and add that (weekday, hour) cell's
+# learned typical rate. Falls back to a supplied recent rate for thin cells.
+
+def _flat_baseline(rate, n_per_cell=10):
+    store = {}
+    for wd in range(7):
+        for hr in range(24):
+            for _ in range(n_per_cell):
+                bb.baseline_update(store, wd, hr, rate)
+    return store
+
+
+def test_smart_projection_uses_baseline_rate():
+    store = _flat_baseline(0.5)  # uniform 0.5%/h learned everywhere
+    now = T("2026-06-20T00:00:00+00:00")
+    reset = T("2026-06-22T00:00:00+00:00")  # 48h left
+    s = bb.smart_projection(50.0, now, reset, store, fallback_rate=None)
+    assert abs(s["projected"] - 74.0) < 0.5   # 50 + 0.5*48
+    assert s["used_baseline"] is True
+    assert s["dry_at"] is None
+
+
+def test_smart_projection_falls_back_when_no_baseline():
+    s = bb.smart_projection(20.0, T("2026-06-20T00:00:00+00:00"),
+                            T("2026-06-20T10:00:00+00:00"), {}, fallback_rate=1.0)
+    assert abs(s["projected"] - 30.0) < 0.2   # 20 + 1.0*10
+    assert s["used_baseline"] is False
+
+
+def test_smart_projection_none_without_any_rate_source():
+    s = bb.smart_projection(20.0, T("2026-06-20T00:00:00+00:00"),
+                            T("2026-06-20T10:00:00+00:00"), {}, fallback_rate=None)
+    assert s is None
+
+
+def test_smart_projection_reports_dry_when_it_crosses_100():
+    store = _flat_baseline(2.0)  # 2%/h
+    now = T("2026-06-20T00:00:00+00:00")
+    reset = T("2026-06-25T00:00:00+00:00")  # 120h
+    s = bb.smart_projection(80.0, now, reset, store, fallback_rate=None)
+    assert s["projected"] > 100
+    assert s["dry_at"] is not None
+    dry_h = (s["dry_at"] - now).total_seconds() / 3600.0
+    assert abs(dry_h - 10.0) < 1.0   # (100-80)/2 = 10h
+
+
+def test_smart_projection_thin_baseline_does_not_poison_to_zero():
+    # regression: a lone near-empty cell must not drag the whole projection to
+    # ~0 via the shrink pool. With thin support we use the fallback rate.
+    store = {}
+    bb.baseline_update(store, weekday=5, hour=20, value=0.0)  # single reading
+    now = T("2026-06-20T00:00:00+00:00")
+    reset = T("2026-06-20T10:00:00+00:00")  # 10h
+    s = bb.smart_projection(20.0, now, reset, store, fallback_rate=1.0)
+    assert abs(s["projected"] - 30.0) < 0.5   # 20 + 1.0*10, NOT ~20
+    assert s["used_baseline"] is False
+
+
+def test_smart_projection_respects_diurnal_rhythm():
+    # busy 08:00-20:00 (3%/h), quiet overnight (0%/h). Over a full day from
+    # 08:00 that is 12*3 = 36%, far below holding the daytime 3%/h flat (72%).
+    store = {}
+    for wd in range(7):
+        for hr in range(24):
+            r = 3.0 if 8 <= hr < 20 else 0.0
+            for _ in range(10):
+                bb.baseline_update(store, wd, hr, r)
+    now = T("2026-06-20T08:00:00+00:00")
+    reset = T("2026-06-21T08:00:00+00:00")  # 24h
+    s = bb.smart_projection(0.0, now, reset, store, fallback_rate=None)
+    assert 30.0 < s["projected"] < 42.0
+
+
+# ── title prefers smart projection; summary status follows it ──────────────
+
+def test_title_prefers_smart_projection_over_spiky_pace():
+    a = {"exhausted": False, "will_run_out": True, "pace": 4.72,
+         "projected": 474.0, "dry_at": T("2026-06-21T00:00:00+00:00"),
+         "reset": T("2026-06-27T11:00:00+00:00")}
+    smart = {"projected": 95.0, "used_baseline": True, "dry_at": None}
+    title = bb.title_for(a, smart)
+    assert "95%" in title
+    assert "4.72" not in title          # the spiky pace no longer headlines
+    assert title[0] in ("🟢", "🟡")
+
+
+def test_title_smart_dry_shows_runway():
+    a = {"exhausted": False, "will_run_out": True, "pace": 2.0,
+         "projected": 200.0, "dry_at": None, "reset": T("2026-06-27T11:00:00+00:00")}
+    smart = {"projected": 180.0, "used_baseline": True,
+             "dry_at": bb.NOW + dt.timedelta(hours=50)}
+    title = bb.title_for(a, smart)
+    assert title.startswith("🔥") and "dry in" in title
+
+
+def test_title_falls_back_to_naive_without_smart():
+    a = {"exhausted": False, "will_run_out": False, "pace": 0.62,
+         "projected": 78.0, "dry_at": None, "reset": T("2026-06-27T11:00:00+00:00")}
+    title = bb.title_for(a, None)
+    assert "0.62×" in title and "78%" in title
+
+
+def test_summary_status_dry_from_smart_projection():
+    weekly = {"exhausted": False, "will_run_out": False, "used": 20.0, "pace": 0.5}
+    smart = {"projected": 130.0, "dry_at": T("2026-06-25T00:00:00+00:00")}
+    assert bb.claude_summary_status(weekly, {"label": "steady"}, smart) == "dry"
+
+
+def test_summary_status_ok_when_smart_fits_despite_spiky_pace():
+    # naive will_run_out + pace 4.7 (spike), but the smart projection fits.
+    weekly = {"exhausted": False, "will_run_out": True, "used": 20.0, "pace": 4.7}
+    smart = {"projected": 60.0, "dry_at": None}
+    assert bb.claude_summary_status(weekly, {"label": "steady"}, smart) == "ok"
+
+
+def test_summary_status_unchanged_without_smart():
+    weekly = {"exhausted": False, "will_run_out": True, "used": 20.0, "pace": 4.7,
+              "dry_at": T("2026-06-21T00:00:00+00:00")}
+    assert bb.claude_summary_status(weekly, {"label": "steady"}, None) == "dry"
+
+
 # ── runner (stdlib only, no pytest) ───────────────────────────────────────
 
 if __name__ == "__main__":

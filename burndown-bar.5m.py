@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # <xbar.title>Burndown Bar</xbar.title>
-# <xbar.version>v1.2.0</xbar.version>
+# <xbar.version>v1.3.0</xbar.version>
 # <xbar.author>Jakub Dudek</xbar.author>
 # <xbar.author.github>alcides-collective</xbar.author.github>
 # <xbar.desc>Not how much Claude quota you've used — how fast you're burning it. Pace vs sustainable, projected dry time vs reset.</xbar.desc>
@@ -256,6 +256,26 @@ def openrouter_status():
 # within a window and drops to ~0 when the window resets, so an interval that
 # straddles a reset can't be attributed cleanly — we skip it.
 
+RESET_JITTER_TOL_S = 120.0  # resets_at wobble below this = same window
+
+
+def same_reset(a, b):
+    """True if two resets_at timestamps denote the same window.
+
+    The usage API recomputes resets_at as (now + window) on every poll, so the
+    stored value jitters by up to a second or two. That wobble can straddle a
+    minute/hour boundary (10:59:59.9 vs 11:00:00.1) and masquerade as a reset,
+    which previously made ~two-thirds of intervals look like rollovers. A real
+    reset moves resets_at by the whole window (hours to days), so a small
+    tolerance cleanly separates jitter from genuine rollovers.
+    """
+    try:
+        delta = dt.datetime.fromisoformat(b) - dt.datetime.fromisoformat(a)
+        return abs(delta.total_seconds()) <= RESET_JITTER_TOL_S
+    except Exception:
+        return a == b
+
+
 def rates_from_snapshots(snaps):
     """Per-interval burn rate (%/h), keyed by the interval's end timestamp."""
     pts = [s for s in snaps if len(s) == 3]
@@ -268,7 +288,7 @@ def rates_from_snapshots(snaps):
             continue
         # A reset between the two samples (window rolled over, or utilization
         # fell) makes the delta meaningless — drop that interval.
-        if a[2] != b[2] or float(b[1]) < float(a[1]):
+        if not same_reset(a[2], b[2]) or float(b[1]) < float(a[1]):
             continue
         out.append((t1, (float(b[1]) - float(a[1])) / dt_h))
     return out
@@ -288,7 +308,7 @@ def detect_limit_events(snaps):
     pts = [s for s in snaps if len(s) == 3]
     events = []
     for a, b in zip(pts, pts[1:]):
-        if a[2] != b[2]:
+        if not same_reset(a[2], b[2]):
             t_b = dt.datetime.fromisoformat(b[0])
             old_reset = dt.datetime.fromisoformat(a[2])
             if t_b < old_reset:  # rolled over before it was due
@@ -364,7 +384,7 @@ def windowed_rate(snaps, now, hours):
             continue
         t0 = dt.datetime.fromisoformat(a[0])
         dt_h = (t1 - t0).total_seconds() / 3600.0
-        if dt_h <= 0 or a[2] != b[2] or float(b[1]) < float(a[1]):
+        if dt_h <= 0 or not same_reset(a[2], b[2]) or float(b[1]) < float(a[1]):
             continue
         burn += float(b[1]) - float(a[1])
         span += dt_h
@@ -423,10 +443,16 @@ def rel_pct(cur, ref):
 
 
 def baseline_query(store, weekday, hour):
-    """Typical value (shrunk) + spread (std) for one weekday/hour cell."""
+    """Typical value (shrunk) + spread (std) for one weekday/hour cell.
+
+    ``support`` is the observation count behind the shrunk mean (the hour-of-day
+    pool, which includes the exact cell). Because the mean borrows from the
+    global pool, it is non-None as soon as *any* cell exists — callers that need
+    to know whether the estimate is trustworthy should gate on ``support``.
+    """
     cells = store.get("cells", {})
     n_e, mean_e, _ = _agg(cells, [f"{weekday}-{hour}"])
-    _, mean_h, var_h = _agg(cells, [f"{wd}-{hour}" for wd in range(7)])
+    n_h, mean_h, var_h = _agg(cells, [f"{wd}-{hour}" for wd in range(7)])
     _, mean_g, var_g = _agg(cells, list(cells.keys()))
 
     pool_mean = mean_h if mean_h is not None else mean_g
@@ -439,7 +465,7 @@ def baseline_query(store, weekday, hour):
 
     var = var_h if var_h is not None else var_g
     std = (var ** 0.5) if var is not None else None
-    return {"mean": mean, "std": std, "n": int(n_e)}
+    return {"mean": mean, "std": std, "n": int(n_e), "support": int(n_h)}
 
 
 # ── Trend classification: is the current rate unusual for this cell? ───────
@@ -728,6 +754,68 @@ def analyze(entry, window_h, now):
     }
 
 
+# ── Smart projection: integrate the learned per-hour baseline to the reset ─
+# The naive projection (analyze's "projected") holds the whole-window-average
+# rate flat — a front-loaded morning spike makes that read 4.7× and "dry in
+# 28h" even when the rest of the day is quiet. The smart projection instead
+# walks every remaining clock hour and adds that (weekday, hour) cell's learned
+# typical burn rate, so overnight/weekend lulls are modelled from your own
+# history. Thin cells fall back to a supplied recent rate; with no history at
+# all and no fallback it returns None (nothing to project from).
+
+SMART_MIN_SUPPORT = 3  # learned-cell observations needed before trusting it
+
+
+def smart_projection(used, now, reset, store, fallback_rate):
+    """Project utilization at ``reset`` by integrating learned per-hour rates.
+
+    ``now``/``reset`` are wall-clock-aware datetimes whose .weekday()/.hour are
+    used directly for baseline lookup (the caller passes local time, matching
+    how baselines are recorded). Returns {projected, used_baseline, dry_at} or
+    None when no rate is available for any remaining hour.
+
+    Each hour uses its learned baseline only once that hour-of-day has enough
+    support (``SMART_MIN_SUPPORT`` observations); otherwise it uses the supplied
+    fallback rate. This matters because ``baseline_query`` borrows from the
+    global pool, so a single early reading would otherwise project every hour at
+    that lone value.
+    """
+    if reset <= now:
+        return None
+    proj = float(used)
+    cursor = now
+    used_baseline = rate_known = False
+    dry_at = None
+    while cursor < reset:
+        # step to the next clock-hour boundary (first step may be partial)
+        boundary = (cursor + dt.timedelta(hours=1)).replace(
+            minute=0, second=0, microsecond=0)
+        nxt = min(reset, boundary)
+        step_h = (nxt - cursor).total_seconds() / 3600.0
+        if step_h <= 0:
+            break
+        cell = baseline_query(store, cursor.weekday(), cursor.hour)
+        rate = None
+        if cell["mean"] is not None and cell.get("support", 0) >= SMART_MIN_SUPPORT:
+            rate = cell["mean"]
+            used_baseline = True
+        elif fallback_rate is not None:
+            rate = fallback_rate
+        elif cell["mean"] is not None:
+            rate = cell["mean"]  # thin, but better than nothing with no fallback
+        if rate is not None:
+            rate_known = True
+            r = max(0.0, rate)
+            if dry_at is None and proj < 100.0 <= proj + r * step_h and r > 0:
+                frac = (100.0 - proj) / (r * step_h)
+                dry_at = cursor + dt.timedelta(hours=step_h * frac)
+            proj += r * step_h
+        cursor = nxt
+    if not rate_known:
+        return None
+    return {"projected": proj, "used_baseline": used_baseline, "dry_at": dry_at}
+
+
 def fmt_when(t, now):
     t = t.astimezone()  # local time
     t = (t + dt.timedelta(seconds=30)).replace(second=0, microsecond=0)
@@ -762,14 +850,23 @@ def line(text, **params):
     print(text)
 
 
-def title_for(a):
+def title_for(a, smart=None):
     if a is None:
         return "🟢 Claude"
     if a["exhausted"]:
         return f"⛔ 100% · resets {fmt_when(a['reset'], NOW)}"
+    if smart is not None:
+        # Smart projection headlines: it models your diurnal rhythm, so a
+        # front-loaded spike no longer screams 4.7×. Runway is relative — on a
+        # weekly window the exact day is noise; how much is left is the point.
+        proj = smart["projected"]
+        if smart.get("dry_at") is not None:
+            runway = fmt_dur((smart["dry_at"] - NOW).total_seconds() / 3600.0)
+            return f"🔥 proj {proj:.0f}% · dry in {runway}"
+        band = "🟡" if proj >= 85.0 else "🟢"
+        return f"{band} proj {proj:.0f}%"
+    # No baselines yet (or projection unavailable): legacy naive title.
     if a["will_run_out"]:
-        # Relative runway, not a calendar date — on a weekly window the exact
-        # day is noise; how much runway is left is the point.
         return f"🔥 {a['pace']:.2f}× → dry in {fmt_dur((a['dry_at'] - NOW).total_seconds() / 3600.0)}"
     if a["pace"] >= 0.85:
         return f"🟡 {a['pace']:.2f}× · proj {a['projected']:.0f}%"
@@ -811,6 +908,25 @@ def render_window(label, a, lead=False):
                  size=12, color=color_ok)
     line(f"Resets {fmt_when(a['reset'], NOW)} (in {fmt_dur(a['left_h'])})",
          size=12, color="gray,gray")
+
+
+def render_smart_projection(smart):
+    """One line: where the baseline-aware projection lands, vs the naive one."""
+    ok, hot, bad = "green,lime", "orange,orange", "red,red"
+    if smart is None:
+        return
+    proj = smart["projected"]
+    basis = "learned rhythm" if smart.get("used_baseline") else "recent pace"
+    if smart.get("dry_at") is not None:
+        runway = fmt_dur((smart["dry_at"] - NOW).total_seconds() / 3600.0)
+        line(f"Smart projection: dry in ~{runway} (≈{proj:.0f}% by reset, {basis})",
+             size=12, color=bad)
+    elif proj >= 85.0:
+        line(f"Smart projection: ~{proj:.0f}% at reset — tight, {max(0, 100 - proj):.0f}% headroom ({basis})",
+             size=12, color=hot)
+    else:
+        line(f"Smart projection: ~{proj:.0f}% at reset — fits, {100 - proj:.0f}% headroom ({basis})",
+             size=12, color=ok)
 
 
 # ── Integration glue: record history, derive trends, notify ───────────────
@@ -869,20 +985,24 @@ def trend_for(rate_fn, store, local_now):
     return {"cls": cls, "rows": rows, "recent": recent}
 
 
-def claude_summary_status(weekly, cls):
+def claude_summary_status(weekly, cls, smart=None):
     if weekly is None:
         return "building"
     if weekly["exhausted"]:
         return "exhausted"
-    if weekly["will_run_out"]:
+    # When a smart projection exists it supersedes the spike-prone naive
+    # "will_run_out"/pace signals for the dry/hot verdict.
+    if smart is not None and smart.get("dry_at") is not None:
+        return "dry"
+    if smart is None and weekly["will_run_out"]:
         return "dry"
     if weekly["used"] <= 0:
         return "idle"
     if cls["label"] == "building":
         return "building"
-    if weekly["pace"] >= 0.85:
-        return "hot"
-    return "ok"
+    if smart is not None:
+        return "hot" if smart["projected"] >= 85.0 else "ok"
+    return "hot" if weekly["pace"] >= 0.85 else "ok"
 
 
 def render_trend_rows(rows, weekday_name):
@@ -903,7 +1023,8 @@ def render_trend_rows(rows, weekday_name):
         line(f"{lbl}: {val}", size=11, color=color)
 
 
-def build_events(weekly, weekly_status, weekly_cls, or_a, or_cls, local_now):
+def build_events(weekly, weekly_status, weekly_cls, or_a, or_cls, local_now,
+                 weekly_smart=None):
     """Candidate notifications; the state machine decides which actually fire."""
     events = []
     wd = local_now.strftime("%A")
@@ -913,7 +1034,10 @@ def build_events(weekly, weekly_status, weekly_cls, or_a, or_cls, local_now):
                            "title": "Claude weekly limit hit",
                            "body": "You're at 100% — waiting on the reset."})
         elif weekly_status == "dry":
-            runway = fmt_dur((weekly["dry_at"] - NOW).total_seconds() / 3600.0)
+            # Prefer the smart projection's runway; fall back to the naive one.
+            dry_at = ((weekly_smart or {}).get("dry_at")) or weekly.get("dry_at")
+            runway = (fmt_dur((dry_at - NOW).total_seconds() / 3600.0)
+                      if dry_at else "soon")
             events.append({"key": "claude-weekly-dry",
                            "title": "Claude burning hot",
                            "body": f"At this pace the weekly limit runs dry in {runway}."})
@@ -1050,8 +1174,21 @@ def main():
     five = results.get("five_hour")
     five_cls = trends["five_hour"]["cls"]
 
+    # ── Smart projection: walk the time left in the weekly window hour by hour,
+    # adding each hour's learned typical burn; fall back to the trailing-24h
+    # rate (then the raw window rate) when baselines are still thin. ──
+    weekly_smart = None
+    if weekly is not None and not weekly["exhausted"]:
+        wk_snaps = claude_hist.get("seven_day", [])
+        fallback = windowed_rate(wk_snaps, NOW, TREND_DAY_H)
+        if fallback is None:
+            fallback = weekly["rate"]
+        weekly_smart = smart_projection(
+            weekly["used"], local_now, weekly["reset"].astimezone(),
+            baselines.setdefault("seven_day", {}), fallback)
+
     # ── Title: one compact glyph carrying weekly + 5h + OpenRouter trends ──
-    emoji, core = title_for(weekly).split(" ", 1)
+    emoji, core = title_for(weekly, weekly_smart).split(" ", 1)
     weekly_t = {"emoji": emoji, "core": core, "dir": weekly_cls["dir"] if weekly else 0}
     five_t = ({"warn": five["used"] >= 90, "dir": five_cls["dir"]}
               if five is not None else None)
@@ -1065,15 +1202,20 @@ def main():
     line("---")
 
     # ── Plain-English, baseline-relative summary up top ──
-    weekly_status = claude_summary_status(weekly, weekly_cls)
+    weekly_status = claude_summary_status(weekly, weekly_cls, weekly_smart)
+    if weekly_smart is not None and weekly_smart.get("dry_at") is not None:
+        runway_h = (weekly_smart["dry_at"] - NOW).total_seconds() / 3600.0
+    elif weekly_smart is None and weekly and weekly["will_run_out"] and weekly["dry_at"]:
+        runway_h = (weekly["dry_at"] - NOW).total_seconds() / 3600.0
+    else:
+        runway_h = None
     claude_sum = {
         "status": weekly_status,
         "dir": weekly_cls["dir"] if weekly else 0,
         "weekday": local_now.strftime("%A"),
         "pace": weekly["pace"] if weekly else 0.0,
         "used": weekly["used"] if weekly else 0.0,
-        "runway_h": ((weekly["dry_at"] - NOW).total_seconds() / 3600.0
-                     if (weekly and weekly["will_run_out"] and weekly["dry_at"]) else None),
+        "runway_h": runway_h,
         "reset_in_h": weekly["left_h"] if weekly else None,
     }
     or_sum = None
@@ -1099,6 +1241,7 @@ def main():
             line("---")
         render_window(label, a, lead=lead)
         if key == "seven_day":
+            render_smart_projection(weekly_smart)
             render_trend_rows(trends["seven_day"]["rows"], local_now.strftime("%A"))
         first = False
 
@@ -1130,7 +1273,8 @@ def main():
     # ── Notify on notable shifts + one-time limit events, then persist ──
     fire_notifications(history, build_events(
         weekly, weekly_status, weekly_cls, or_a,
-        (or_trend["cls"] if or_trend else None), local_now), local_now)
+        (or_trend["cls"] if or_trend else None), local_now,
+        weekly_smart=weekly_smart), local_now)
     notify_recent = [e for e in history.get("limit_events", []) if _event_age_h(e) <= 24.0]
     for e in pending_limit_notifications(history, notify_recent, local_now):
         title = ("Fresh quota" if e["kind"] == "reset_early" else "Limit raised")
