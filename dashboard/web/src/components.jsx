@@ -76,8 +76,10 @@ export function SurgeBanner({ surge }) {
 // weekday(0=Mon) × hour(0..23) baseline burn-rate heatmap
 const WD = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 export function Heatmap({ grid, support }) {
-  let max = 0
-  grid.forEach((r) => r.forEach((v) => { if (v != null && v > max) max = v }))
+  // robust scale: normalise to the 90th percentile so one spike hour doesn't
+  // wash out the rest; sqrt curve lifts the quiet-but-nonzero hours into view.
+  const vals = grid.flat().filter((v) => v != null && v > 0).sort((a, b) => a - b)
+  const max = vals.length ? (vals[Math.floor(vals.length * 0.9)] || vals[vals.length - 1]) : 1
   const reduce = useReducedMotion()
   return (
     <div className="heat" role="img" aria-label="typical burn by weekday and hour">
@@ -86,9 +88,9 @@ export function Heatmap({ grid, support }) {
           <div className="hlab">{WD[wd]}</div>
           {row.map((v, hr) => {
             const has = v != null && max > 0 && (support?.[wd]?.[hr] || 0) > 0
-            const intensity = has ? Math.min(1, v / max) : 0
+            const intensity = has ? Math.min(1, Math.sqrt(v / max)) : 0
             const bg = has
-              ? `color-mix(in oklch, var(--accent) ${Math.round(8 + intensity * 82)}%, transparent)`
+              ? `color-mix(in oklch, var(--accent) ${Math.round(16 + intensity * 78)}%, transparent)`
               : 'var(--surface)'
             const i = wd * 24 + hr
             return (

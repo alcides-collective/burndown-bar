@@ -197,14 +197,19 @@ def compute_claude(data, history, now):
                 pass
     curve = _downsample(sorted(curve))
 
-    # weekday × hour baseline grid (shrunk mean burn rate %/h) for the heatmap
+    # weekday × hour grid for the heatmap — RAW per-cell mean burn rate (%/h),
+    # not the shrunk baseline, so only hours you've actually worked light up
+    # (the shrunk mean smears every cell toward the pool and reads as uniform).
+    cells = wk_store.get("cells", {})
     grid, support = [], []
     for wd in range(7):
         row, srow = [], []
         for hr in range(24):
-            q = bb.baseline_query(wk_store, wd, hr)
-            row.append(round(q["mean"], 3) if q["mean"] is not None else None)
-            srow.append(q.get("support", 0))
+            c = cells.get(f"{wd}-{hr}")
+            if c and c[0] > 0:
+                row.append(round(c[1] / c[0], 3)); srow.append(int(c[0]))
+            else:
+                row.append(None); srow.append(0)
         grid.append(row)
         support.append(srow)
 
