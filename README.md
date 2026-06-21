@@ -122,6 +122,24 @@ chmod 600 ~/.config/burndown-bar/openrouter-key
 
 The key needs no special scope — a normal inference key works (it reads `/api/v1/credits`). Nothing is written anywhere except `openrouter.ai`. With no key configured, the OpenRouter section simply doesn't appear. The spend trajectory needs a little history to warm up; until then it just shows the balance.
 
+## Web dashboard (optional)
+
+The menu bar is the glance; the dashboard is the full picture. `dashboard/` is a small local web app at **`http://localhost:3838`** that reads the same caches and renders the analysis in depth — charts, projections, trends, and history you can actually pore over. It's **read-only** and reuses the plugin's own tested analytics (no math is reimplemented).
+
+```sh
+cd dashboard && ./install.sh      # builds the UI, starts it on login
+```
+
+What it adds on top of the menu bar:
+
+- **Charts for everything** — the weekly burn curve with the naive *and* smart projection drawn out, the OpenRouter balance drawdown, a weekday × hour baseline heatmap, and long-range history.
+- **Real token history** — it scans your local Claude Code transcripts (`~/.claude/projects`) for actual per-message token counts, so you get true usage by **model, project, and day** — not just the opaque %-of-limit windows. It dedups split messages and scans incrementally.
+- **Week-over-week & a projected monthly OpenRouter bill**, from a hourly archive it keeps itself (the plugin only retains ~21 days; the dashboard backfills from that and then grows to months).
+- **An incident timeline** — spend surges, weekly exhaustion, stale data, and Anthropic limit changes, tracked as episodes with duration and peak.
+- **Phone alerts via [ntfy](https://ntfy.sh)** — because the dashboard runs continuously (a macOS LaunchAgent), it's a reliable watchdog: a spend surge, a balance about to run dry, or the plugin going stale can push to your phone. The surge alert is urgent and overrides quiet hours, since a runaway bill at 3am is exactly when you can't see it. Subscribe to the topic printed at startup (override it with `$BURNDOWN_NTFY_TOPIC`).
+
+Built with a small React + Motion + uPlot front-end (Vite) over a standard-library Python backend — no framework, styled to be quiet and editorial. It never calls any API; it only reads what the plugin already fetched, plus your local transcripts. See [`dashboard/README.md`](dashboard/README.md) for configuration and the env vars.
+
 ## How it works
 
 Burndown Bar reads your Claude Code OAuth token from the macOS Keychain and polls the same usage endpoint that Claude Code's `/usage` command uses, every 5 minutes. Since the API reports each window's reset time, the window start is just `reset − 168h` (or 5 h) — which is what makes trajectory math possible at all. Nothing leaves your machine except that one HTTPS request to `api.anthropic.com` (plus one to `openrouter.ai` if you've added an OpenRouter key). No analytics, no third-party servers, no token refreshing (it never touches your refresh token — if the access token expires, it just tells you to run any Claude Code prompt).

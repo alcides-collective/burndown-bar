@@ -1,142 +1,362 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Burndown Bar — how fast you're burning Claude quota</title>
-<meta name="description" content="A macOS menu bar plugin that tells you not how much Claude quota you've used, but how fast you're burning it — pace vs sustainable, projected dry time vs reset, and trends against your own usual.">
-<meta property="og:title" content="Burndown Bar">
-<meta property="og:description" content="Not how much Claude quota you've used — how fast you're burning it.">
-<meta property="og:type" content="website">
-<link rel="stylesheet" href="style.css">
+<meta name="description" content="Not how much Claude quota you've used — how fast you're burning it. Pace against sustainable, a learned projection of where you'll land at reset, real token history from your own transcripts, and a phone alert before a runaway OpenRouter bill. macOS." />
+<meta property="og:title" content="Burndown Bar" />
+<meta property="og:description" content="Not how much Claude quota you've used — how fast you're burning it." />
+<style>
+  :root {
+    --bg: oklch(1 0 0);
+    --fg: oklch(0.145 0 0);
+    --muted: oklch(0.97 0 0);
+    --muted-fg: oklch(0.556 0 0);
+    --border: oklch(0.922 0 0);
+    --accent: oklch(0.488 0.243 264.376);
+    --good: oklch(0.52 0.13 152);
+    --warn: oklch(0.68 0.16 70);
+    --danger: oklch(0.577 0.245 27.325);
+    --radius: 10px;
+    --sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: oklch(0.145 0 0);
+      --fg: oklch(0.985 0 0);
+      --muted: oklch(0.205 0 0);
+      --muted-fg: oklch(0.708 0 0);
+      --border: oklch(1 0 0 / 12%);
+      --accent: oklch(0.62 0.19 264);
+      --good: oklch(0.7 0.15 152);
+      --warn: oklch(0.8 0.15 75);
+      --danger: oklch(0.7 0.2 27);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font-family: var(--sans); font-weight: 400; font-size: 15px; line-height: 1.6;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 28px; }
+  a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--border); }
+  a:hover { border-bottom-color: var(--fg); }
+  h1, h2, h3 { font-weight: 500; letter-spacing: -0.01em; }
+  hr { border: 0; border-top: 1px solid var(--border); margin: 0; }
+  code, pre, .mono { font-family: var(--mono); }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* hero */
+  header.hero { padding: 88px 0 56px; }
+  .mark { display: inline-flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted-fg); }
+  .mark .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+  h1.word { font-size: 46px; line-height: 1.05; margin: 22px 0 0; letter-spacing: -0.03em; }
+  .lead { font-size: 19px; line-height: 1.5; margin: 18px 0 0; max-width: 40ch; }
+  .aside { color: var(--muted-fg); font-size: 13.5px; margin: 14px 0 0; }
+  .cta { margin: 30px 0 0; display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline; font-size: 14px; }
+  .cta .ghost { color: var(--muted-fg); }
+
+  /* ── live dashboard replica (localhost:3838) ── */
+  .sim {
+    position: relative; margin: 40px 0 0; border: 1px solid var(--border);
+    border-radius: 14px; overflow: hidden; background: var(--bg);
+  }
+  .winbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--muted);
+  }
+  .winbar .lights { display: inline-flex; gap: 7px; }
+  .winbar .lights i { width: 11px; height: 11px; border-radius: 50%; background: var(--border); }
+  .winbar .addr {
+    font-family: var(--mono); font-size: 12px; color: var(--muted-fg);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 11px;
+  }
+  .dash-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  .dash-head .brand { font-size: 13px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
+  .dash-head .chip {
+    font-family: var(--mono); font-size: 11px; color: var(--muted-fg);
+    border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+  }
+  .dash-head .chip.alert { color: var(--danger); border-color: color-mix(in oklch, var(--danger) 45%, var(--border)); }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; padding: 16px; }
+  .stat { border: 1px solid var(--border); border-radius: var(--radius); padding: 13px 14px; display: flex; flex-direction: column; gap: 5px; }
+  .stat .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted-fg); }
+  .stat .val { font-size: 25px; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.05; }
+  .stat .foot { font-size: 11px; color: var(--muted-fg); font-variant-numeric: tabular-nums; }
+  .stat .foot.good { color: var(--good); } .stat .foot.warn { color: var(--warn); } .stat .foot.danger { color: var(--danger); }
+
+  .surge {
+    margin: 0 16px; max-height: 0; opacity: 0; overflow: hidden;
+    border-radius: var(--radius); display: flex; align-items: center; gap: 12px;
+    transition: max-height .45s ease, opacity .45s ease, margin-bottom .45s ease, padding .45s ease;
+    background: color-mix(in oklch, var(--danger) 12%, var(--bg));
+    border: 1px solid color-mix(in oklch, var(--danger) 45%, var(--border));
+    padding: 0 16px;
+  }
+  .surge.on { max-height: 76px; opacity: 1; margin-bottom: 4px; padding: 12px 16px; }
+  .surge .big { font-size: 20px; }
+  .surge .txt { font-size: 12.5px; line-height: 1.4; }
+  .surge .txt b { color: var(--danger); font-weight: 500; }
+
+  .panel { margin: 4px 16px 18px; }
+  .panel .ph { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-fg); margin-bottom: 8px; }
+  svg.burn { width: 100%; height: auto; display: block; }
+  .burn path, .burn line { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .burn .actual { stroke: var(--fg); stroke-width: 2.5; }
+  .burn .smart { stroke: var(--accent); stroke-width: 2.5; }
+  .burn .draw { stroke-dasharray: 1000; stroke-dashoffset: 1000; animation: draw 1.5s ease forwards; }
+  .burn .smart.draw { animation-delay: .45s; }
+  .burn .naive { stroke: var(--muted-fg); stroke-width: 1.5; stroke-dasharray: 5 4; opacity: 0; animation: fade .8s ease .9s forwards; }
+  .burn .ref { stroke: var(--danger); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; animation: fade .8s ease 1s forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  @keyframes fade { to { opacity: .6; } }
+  .burn .naive.show { opacity: .55; } .burn .ref.show { opacity: .55; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 11px; color: var(--muted-fg); }
+  .legend i { display: inline-block; width: 11px; height: 2px; vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+  .legend i.dash { height: 0; border-top: 2px dashed currentColor; }
+  .simcap { font-size: 12.5px; color: var(--muted-fg); margin: 12px 0 0; text-align: center; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .burn .draw { animation: none; stroke-dashoffset: 0; }
+    .burn .naive, .burn .ref { animation: none; opacity: .55; }
+  }
+
+  /* sections */
+  section { padding: 52px 0; }
+  section + section { border-top: 1px solid var(--border); }
+  .layer { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .layer h2 { font-size: 20px; margin: 10px 0 0; }
+  .layer p { margin: 6px 0 0; color: var(--fg); max-width: 54ch; }
+  .layer .num { font-family: var(--mono); font-size: 12px; color: var(--muted-fg); }
+  .mock {
+    margin: 20px 0 0; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--muted); padding: 14px 16px; font-family: var(--mono); font-size: 12.5px;
+    line-height: 1.7; color: var(--fg); white-space: pre; overflow-x: auto; min-width: 0; max-width: 100%;
+  }
+  .mock .g { color: var(--good); } .mock .o { color: var(--warn); } .mock .r { color: var(--danger); } .mock .b { color: var(--accent); } .mock .m { color: var(--muted-fg); }
+  .mock .bar { color: var(--accent); }
+
+  pre.install {
+    margin: 18px 0 0; border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--muted); padding: 16px 18px; font-size: 13px; line-height: 1.7; overflow-x: auto;
+    min-width: 0; max-width: 100%;
+  }
+  pre.install .c { color: var(--muted-fg); }
+  .caveat { color: var(--muted-fg); font-size: 13px; margin: 14px 0 0; }
+
+  footer { padding: 40px 0 64px; color: var(--muted-fg); font-size: 13px; display: flex; gap: 18px; flex-wrap: wrap; }
+  @media (max-width: 560px) { h1.word { font-size: 38px; } .lead { font-size: 17px; } .stats { grid-template-columns: repeat(2, 1fr); } }
+</style>
 </head>
 <body>
-<main>
+<div class="wrap">
 
   <header class="hero">
-    <h1>Burndown Bar</h1>
-    <p class="tagline">Not how much Claude quota you've used &mdash; how fast you're burning it.</p>
-
-    <div class="bar" role="img" aria-label="Menu bar reading: weekly projected 88 percent at reset and trending up, 5-hour session up, OpenRouter 12 dollars 34 and spend easing">
-      <span class="dot warn">&#x1F7E1;</span> proj 88%<span class="up">&uarr;</span>
-      <span class="sep">5h<span class="up">&uarr;</span></span>
-      &middot; OR $12.34<span class="down">&darr;</span>
+    <span class="mark"><span class="dot"></span> for Claude Code · macOS</span>
+    <h1 class="word">Burndown Bar</h1>
+    <p class="lead">Not how much Claude quota you've used — how fast you're burning it. The slope, not the level: pace against sustainable, a learned projection of where you'll land at reset, and a phone alert before a runaway bill.</p>
+    <p class="aside">Every other monitor shows the number. This one does the second step you can't do in your head.</p>
+    <div class="cta">
+      <a href="https://github.com/alcides-collective/burndown-bar">GitHub →</a>
+      <span class="ghost">open-source · stdlib only · runs on your machine</span>
     </div>
 
-    <div class="actions">
-      <a class="btn primary" href="#install">Install</a>
-      <a class="btn" href="https://github.com/alcides-collective/burndown-bar">View on GitHub</a>
+    <div class="sim" aria-label="Replica of the Burndown dashboard">
+      <div class="winbar">
+        <span class="lights"><i></i><i></i><i></i></span>
+        <span class="addr">localhost:3838</span>
+      </div>
+      <div class="dash-head">
+        <span class="brand">Burndown</span>
+        <span class="chip" id="chip">🔔 alerts → ntfy</span>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><span class="label">Weekly used</span><span class="val" id="wk">30%</span><span class="foot">of the 168 h window</span></div>
+        <div class="stat"><span class="label">Smart projection</span><span class="val" id="sp">92%</span><span class="foot warn" id="spf">tight · learned rhythm</span></div>
+        <div class="stat"><span class="label">Pace</span><span class="val" id="pace">1.4×</span><span class="foot">vs sustainable</span></div>
+        <div class="stat"><span class="label">OpenRouter</span><span class="val" id="or">$12.34</span><span class="foot" id="orf">~18 h runway</span></div>
+      </div>
+
+      <div class="surge" id="surge">
+        <span class="big">🚨</span>
+        <span class="txt"><b>OpenRouter spend surge.</b> $48/h, ~70× your normal — balance empties in ~14 min. Runaway process?</span>
+      </div>
+
+      <div class="panel">
+        <div class="ph">Weekly burn — actual vs projection</div>
+        <svg class="burn" viewBox="0 0 600 176" preserveAspectRatio="none" aria-hidden="true">
+          <line class="ref" x1="8" y1="30" x2="592" y2="30"></line>
+          <path class="naive" d="M150,124 L560,18"></path>
+          <path class="smart draw" d="M150,124 C 280,108 420,72 560,42"></path>
+          <path class="actual draw" d="M10,164 L46,158 L84,150 L120,136 L150,124"></path>
+        </svg>
+        <div class="legend">
+          <span style="color:var(--fg)"><i style="background:var(--fg)"></i>actual</span>
+          <span style="color:var(--accent)"><i style="background:var(--accent)"></i>smart projection → 92%</span>
+          <span><i class="dash"></i>naive (flat pace) → 465%</span>
+          <span style="color:var(--danger)"><i class="dash" style="color:var(--danger)"></i>100% limit</span>
+        </div>
+      </div>
     </div>
+    <p class="simcap">A replica of the dashboard at <code>localhost:3838</code> — running on a script.</p>
   </header>
 
-  <section>
-    <p>Every Claude usage monitor tells you the level: <code>76% used</code>. Burndown Bar tells you
-    the slope. 76% on its own means nothing. 76% with only 69% of the week elapsed means you run
-    dry Friday night and the reset isn't until Saturday afternoon &mdash; and that is the sentence
-    your menu bar shows at a glance.</p>
-
-    <ul class="legend">
-      <li><span class="dot ok">&#x1F7E2;</span> sustainable pace</li>
-      <li><span class="dot warn">&#x1F7E1;</span> tight</li>
-      <li><span class="dot hot">&#x1F525;</span> won't reach the reset</li>
-      <li><span class="dot">&#x26D4;</span> already hit</li>
-    </ul>
-  </section>
+  <hr />
 
   <section>
-    <h2>What the dropdown shows</h2>
-    <pre class="screen" aria-label="Example dropdown contents">
-<b>&#x1F7E1; proj 88%&uarr;  5h&uarr; &middot; OR $12.34&darr;</b>
-&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;
-You're heavier than your typical Friday on Claude, but
-there's still room &mdash; only 77% of the week gone. Spend's
-eased on OpenRouter; $12.34 now stretches ~15 d.
-&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;&#9472;
-Weekly limit &mdash; 77% used
-Elapsed: 4.8 d of 7.0 d window (69% of the time)
-Pace: 1.12&times; sustainable (0.67%/h &asymp; 16.0%/day)
-Runs dry tomorrow 18:50 &mdash; 18.2 h BEFORE reset
-Resets Sat Jun 13, 13:00 (in 2.2 d)
-Smart projection: ~88% at reset &mdash; fits, 12% headroom (learned rhythm)
-vs typical this hour: +38%
-vs typical Friday:    +12%
-vs typical week:      -4%</pre>
-  </section>
-
-  <section>
-    <h2>What it does</h2>
-    <dl class="features">
-      <dt>Reads the trajectory, not the number</dt>
-      <dd>For each window &mdash; weekly, 5-hour, per-model &mdash; it works out your burn rate, your
-      pace against the sustainable rate, and either the headroom you'll land with at reset or the
-      hour you run dry and how far that falls before the reset.</dd>
-
-      <dt>A smart projection that knows your rhythm</dt>
-      <dd>A straight-line projection assumes you burn through the night and the weekend &mdash; you
-      don't. The weekly window's smart projection walks the hours left to reset and applies your
-      <em>own</em> learned burn for each weekday and hour, so a busy afternoon isn't mistaken for a
-      runaway week. It's the figure the menu bar leads with; the plain projection stays in the
-      dropdown beside it. Thin on history? It falls back to your recent pace and says so.</dd>
-
-      <dt>Trends against your own usual</dt>
-      <dd>It quietly records a snapshot each run and learns your rhythm &mdash; what a typical Tuesday
-      afternoon looks like, apart from a typical Saturday morning &mdash; then reports the present
-      against it: arrows in the menu bar and a two-sentence plain-English summary up top. No model,
-      no API; just your history and arithmetic. A trend is only called when the rate is genuinely
-      out of line with your own variance, so ordinary noise stays quiet.</dd>
-
-      <dt>Notifications when something actually shifts</dt>
-      <dd>A heavy day, a spend spike, a balance about to run dry. Each fires once, with a cooldown,
-      and nothing arrives between 22:00 and 08:00.</dd>
-
-      <dt>Catches it when Anthropic moves your limits</dt>
-      <dd>Early resets and quiet mid-window quota bumps are detected from the usage stream, logged in
-      the dropdown, and &mdash; importantly &mdash; left out of your learned baseline, so a holiday
-      grant never becomes your new normal.</dd>
-
-      <dt>OpenRouter credits, optionally</dt>
-      <dd>Add a key and it tracks your prepaid balance and extrapolates when it hits zero, surviving
-      top-ups because it reads cumulative spend.</dd>
-
-      <dt>Catches a runaway spending bug</dt>
-      <dd>OpenRouter credit is real money, so a buggy process can burn it fast. When spend over the
-      last half hour jumps well above your normal <em>and</em> would drain the balance quickly, a
-      &#x1F6A8; surge alarm fires &mdash; and because a leak at 3am is exactly when you can't see it,
-      this one overrides quiet hours. Brief one-off bursts are averaged out, so it only trips on a
-      sustained surge.</dd>
-
-      <dt>Private, and one file</dt>
-      <dd>Stdlib-only Python, no dependencies, auditable in five minutes. Nothing leaves your machine
-      but the same usage request Claude Code already makes.</dd>
-    </dl>
-  </section>
-
-  <section id="install">
-    <h2>Install</h2>
-    <p>Requires macOS, <a href="https://github.com/swiftbar/SwiftBar">SwiftBar</a>, and a Claude
-    Pro or Max subscription with <a href="https://code.claude.com">Claude Code</a> logged in.</p>
-
-    <div class="code-block">
-      <pre id="install-cmd">brew install swiftbar   # if you don't have it yet
-curl -fsSL https://raw.githubusercontent.com/alcides-collective/burndown-bar/main/burndown-bar.5m.py \
-  -o "$(defaults read com.ameba.SwiftBar PluginDirectory)/burndown-bar.5m.py" \
-  &amp;&amp; chmod +x "$(defaults read com.ameba.SwiftBar PluginDirectory)/burndown-bar.5m.py"</pre>
-      <button class="copy" type="button" data-target="install-cmd">Copy</button>
+    <div class="layer">
+      <span class="num">01 — pace</span>
+      <h2>How fast, not how full.</h2>
+      <p>76% used means nothing on its own. 76% with only 69% of the week elapsed means you run dry before the reset. Burndown does that second step and puts the verdict in the menu bar: a multiple of the sustainable rate, and where you'll land at reset — green when it fits, 🔥 when it won't (and when you'll hit the wall).</p>
+      <div class="mock"><span class="g">🟢 proj 78%</span>          sustainable · right on your Tuesday
+<span class="o">🟡 proj 92%↑</span>         tight — heavier than usual
+<span class="r">🔥 proj 140% · dry in 31 h</span></div>
     </div>
-
-    <p>The first run shows one macOS Keychain prompt &mdash; the plugin reads your Claude Code token
-    via the system <code>security</code> tool. Click <strong>Always Allow</strong> once and you're
-    done. Trends say &ldquo;still building history&rdquo; until enough snapshots accumulate; hour and
-    day comparisons appear within a day, week-over-week after about two weeks.</p>
   </section>
+
+  <section>
+    <div class="layer">
+      <span class="num">02 — projection</span>
+      <h2>It knows you don't burn quota while you sleep.</h2>
+      <p>A naïve line holds your current pace flat — so a busy afternoon reads as a runaway week. The <strong>smart projection</strong> walks each hour left to the reset and applies your <em>own</em> learned burn for that weekday and hour, modelling quiet nights and weekends from your history. Until a cell has data, it falls back to recent pace and says which it's using.</p>
+      <div class="mock">Weekly limit — 30% used
+<span class="m">naive (flat pace)</span>   → proj <span class="r">465%</span>   dry tomorrow
+<span class="b">smart (learned)</span>     → proj  <span class="g">92%</span>   fits · 8% headroom</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="layer">
+      <span class="num">03 — surge alarm</span>
+      <h2>A runaway bill, caught while you sleep.</h2>
+      <p>OpenRouter credit is real money, so a buggy process can burn it fast. When spend over the last half hour jumps far above your normal <em>and</em> would drain the balance quickly, a surge alert pushes to your phone over <a href="https://ntfy.sh">ntfy</a> — and because a leak at 3am is exactly when you can't see it, this one overrides quiet hours. Brief bursts are averaged out, so it only trips on a real surge.</p>
+      <div class="mock"><span class="r">🚨 OpenRouter spend surge</span>          <span class="m">03:14</span>
+$48.20/h, ~70× your normal —
+balance empties in ~14 min.
+<span class="m">Runaway process?</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="layer">
+      <span class="num">04 — token history</span>
+      <h2>Real tokens, from your own transcripts.</h2>
+      <p>The usage API only gives opaque %-of-limit windows. The dashboard reads your local Claude Code transcripts for the actual per-message token counts, so you get true usage by <strong>model, project, and day</strong> — deduped and scanned incrementally. Nothing is sent anywhere; it's already on disk.</p>
+      <div class="mock">this week · input + output         <span class="b">+107% vs last</span>
+opus-4-8   <span class="bar">████████████████</span>  35.9M
+opus-4-7   <span class="bar">██████████▏</span>      24.1M
+fable-5    <span class="bar">██</span>               4.1M
+sonnet     <span class="bar">▏</span>                0.2M</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="layer">
+      <span class="num">05 — memory</span>
+      <h2>Every shift, remembered.</h2>
+      <p>It learns what a typical Tuesday 3pm looks like and flags when now is out of line. It logs each episode — a spend surge with its peak and dollars burned, a weekly exhaustion, an early reset Anthropic slipped in — as an incident with a start and an end. And it leaves those abnormal periods out of the baseline, so a holiday spike never becomes your new normal.</p>
+      <div class="mock"><span class="r">00:14  🚨 surge</span>     peak $48/h · 22 m · <span class="r">-$3.10</span>
+<span class="o">Sat    ⛔ weekly</span>    exhausted — waited on reset
+<span class="m">Sat    ↺ reset early</span>  (Anthropic)</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="layer">
+      <span class="num">how it works</span>
+      <h2>Reads what's already there. Nothing leaves.</h2>
+      <div class="mock">usage API ───┐
+~/.claude ───┼──→ analytics ──┬──→ menu bar
+keychain  ───┘   (one file)   ├──→ dashboard :3838 ──→ charts
+                              └──→ ntfy ──────────────→ phone</div>
+      <p style="margin-top:16px">The plugin polls the same endpoint Claude Code's <code>/usage</code> uses, reconstructs each window's burn rate from snapshot deltas, and learns your rhythm — all in one stdlib Python file. The dashboard reuses that exact math; it only ever reads. Two HTTPS requests leave the machine — <code>api.anthropic.com</code> and <code>openrouter.ai</code> — plus the ntfy push you opt into.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="layer">
+      <span class="num">install</span>
+      <h2>One file for the bar. One command for the dashboard.</h2>
+<pre class="install"><span class="c"># macOS · SwiftBar · Python 3 (no dependencies)</span>
+brew install swiftbar
+curl -fsSL https://raw.githubusercontent.com/alcides-collective/burndown-bar/main/burndown-bar.5m.py \
+  -o "$(defaults read com.ameba.SwiftBar PluginDirectory)/burndown-bar.5m.py"
+
+<span class="c"># optional: web dashboard + phone alerts (starts on login)</span>
+cd dashboard &amp;&amp; ./install.sh        <span class="c"># → localhost:3838</span></pre>
+      <p class="caveat">macOS only. The menu bar needs <a href="https://swiftbar.app">SwiftBar</a> and a Claude Pro/Max subscription logged into Claude Code. The dashboard adds a small React + Motion + uPlot front-end over a stdlib Python backend. System fonts throughout — no web fonts, no trackers.</p>
+    </div>
+  </section>
+
+  <hr />
 
   <footer>
-    <a href="https://github.com/alcides-collective/burndown-bar">GitHub</a> &middot;
-    <a href="https://github.com/alcides-collective/burndown-bar/blob/main/LICENSE">MIT</a> &middot;
-    by <a href="https://github.com/alcides-collective">alcides-collective</a>
+    <a href="https://github.com/alcides-collective/burndown-bar">github.com/alcides-collective/burndown-bar</a>
+    <span>built with Claude Code</span>
+    <span>not affiliated with Anthropic</span>
   </footer>
 
-</main>
-<script src="app.js"></script>
+</div>
+
+<script>
+  (function () {
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var $ = function (id) { return document.getElementById(id); };
+    var chip = $("chip"), surge = $("surge");
+
+    // story frames for the replica: calm → climbing → surge → recover
+    var FRAMES = [
+      { wk: 30, sp: 92, spf: "tight · learned rhythm", spfTone: "warn", pace: "1.4×", or: 12.34, orf: "~18 h runway", orfTone: "", surge: false, dwell: 3200 },
+      { wk: 41, sp: 96, spf: "tight · learned rhythm", spfTone: "warn", pace: "1.6×", or: 9.10, orf: "~13 h runway", orfTone: "", surge: false, dwell: 3200 },
+      { wk: 44, sp: 97, spf: "tight · learned rhythm", spfTone: "warn", pace: "1.6×", or: 6.20, orf: "empties in ~14 min", orfTone: "danger", surge: true, dwell: 4600 },
+      { wk: 52, sp: 99, spf: "tight · learned rhythm", spfTone: "warn", pace: "1.7×", or: 3.80, orf: "~6 h runway", orfTone: "danger", surge: false, dwell: 3200 }
+    ];
+
+    function setTone(el, tone) { el.className = "foot" + (tone ? " " + tone : ""); }
+
+    function apply(f) {
+      $("pace").textContent = f.pace;
+      $("spf").textContent = f.spf; setTone($("spf"), f.spfTone);
+      $("orf").textContent = f.orf; setTone($("orf"), f.orfTone);
+      surge.classList.toggle("on", f.surge);
+      chip.classList.toggle("alert", f.surge);
+      chip.textContent = f.surge ? "🚨 spend surge" : "🔔 alerts → ntfy";
+    }
+
+    if (reduce) {
+      var f0 = FRAMES[0]; apply(f0);
+      $("wk").textContent = f0.wk + "%"; $("sp").textContent = f0.sp + "%"; $("or").textContent = "$" + f0.or.toFixed(2);
+      return;
+    }
+
+    function tween(dur, cb) {
+      var s = null;
+      function step(ts) { if (s === null) s = ts; var p = Math.min(1, (ts - s) / dur); cb(p); if (p < 1) requestAnimationFrame(step); }
+      requestAnimationFrame(step);
+    }
+
+    var cur = { wk: 30, sp: 92, or: 12.34 };
+    function show(i) {
+      var f = FRAMES[i]; apply(f);
+      var fw = cur.wk, fs = cur.sp, fo = cur.or;
+      tween(800, function (p) {
+        $("wk").textContent = Math.round(fw + (f.wk - fw) * p) + "%";
+        $("sp").textContent = Math.round(fs + (f.sp - fs) * p) + "%";
+        $("or").textContent = "$" + (fo + (f.or - fo) * p).toFixed(2);
+      });
+      cur = { wk: f.wk, sp: f.sp, or: f.or };
+      setTimeout(function () { show((i + 1) % FRAMES.length); }, f.dwell);
+    }
+    setTimeout(function () { show(0); }, 600);
+  })();
+</script>
 </body>
 </html>
